@@ -7,6 +7,7 @@ services:
         BASE_IMAGE: ${KAGENT_BASE_IMAGE:-registry.corp.test:8890/python:3.12-bookworm}
         PIP_INDEX_URL: ${KAGENT_PIP_INDEX_URL:-http://registry.corp.test:8081/repository/PyPI/simple}
         PIP_TRUSTED_HOST: ${KAGENT_PIP_TRUSTED_HOST:-registry.corp.test}
+        KUBECTL_URL: ${KAGENT_KUBECTL_URL:-http://mirror.corp.test:8084/repository/raw-hosted/kubectl}
     image: kagent:local
     restart: unless-stopped
     ports:
