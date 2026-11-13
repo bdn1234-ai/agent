@@ -16,6 +16,8 @@ import re
 import threading
 from datetime import timedelta
 
+import yaml
+
 from . import db, live
 from .tools import ENVS
 
@@ -756,9 +758,34 @@ def actions_by_episode(conn, incident_id: str, episodes: list[dict]) -> dict[str
             result = a["result"]  # bị cắt 2000 ký tự nên không còn là JSON
         out.setdefault(ep, []).append({"tool": a["tool"], "args": a.get("args"), "why": a.get("why"), "status": a["status"], "auto": bool(a.get("auto")),
                                        "risk_tier": a.get("risk_tier"), "reasons": a.get("reasons") or [], "approval_id": a.get("approval_id"),
-                                       "verified": a.get("verified"), "result": result,
+                                       "verified": a.get("verified"), "result": result, "summary": describe(a.get("args")),
                                        "action_class": "write" if _is_write(conn, inc["tenant_id"], a["tool"]) else "read"})
     return out
+
+
+MANIFEST_VERBS = {"apply": "tạo hoặc cập nhật", "create": "tạo", "replace": "thay", "delete": "xóa", "patch": "sửa"}
+
+
+def describe(args) -> str | None:
+    """Câu ngắn cho lệnh kubectl kèm manifest khi không có _why: dòng lệnh chỉ còn "apply -f -", không nói đụng vào đối tượng nào."""
+    if not isinstance(args, dict) or not isinstance(args.get("manifest"), str):
+        return None
+    try:
+        docs = [d for d in yaml.safe_load_all(args["manifest"]) if isinstance(d, dict)]
+    except yaml.YAMLError:
+        return None
+    command = args.get("command") if isinstance(args.get("command"), str) else ""
+    words = command.split()
+    verb = MANIFEST_VERBS.get(next((w for w in words if w in MANIFEST_VERBS), ""), "áp manifest")
+    flag_ns = next((words[i + 1] for i, w in enumerate(words[:-1]) if w in ("-n", "--namespace")), None)
+    names = []
+    for d in docs[:5]:
+        meta = d.get("metadata") if isinstance(d.get("metadata"), dict) else {}
+        ns = meta.get("namespace") or flag_ns
+        names.append(f"{d.get('kind', '?')} {meta.get('name', '?')}" + (f" (namespace {ns})" if ns else ""))
+    if not names:
+        return None
+    return f"{verb} " + ", ".join(names) + (f" và {len(docs) - 5} đối tượng khác" if len(docs) > 5 else "")
 
 
 def _cmd(step: dict) -> str:

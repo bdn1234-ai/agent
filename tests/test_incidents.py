@@ -448,6 +448,15 @@ def test_conversation_shows_incident_actions_on_investigation_turn(flow, users):
     assert ran["status"] == "ok" and ran["auto"] and "restarted" in json.dumps(ran["result"]) and msgs[0]["incident_actions"] == []
 
 
+def test_describe_names_manifest_objects():
+    manifest = "apiVersion: v1\nkind: Service\nmetadata:\n  name: svc-document-wikijs\n  namespace: svc-document\nspec: {}\n"
+    assert incidents.describe({"command": "apply -f -", "manifest": manifest}) == "tạo hoặc cập nhật Service svc-document-wikijs (namespace svc-document)"
+    two = "kind: ConfigMap\nmetadata: {name: a}\n---\nkind: Deployment\nmetadata: {name: b}\n"
+    assert incidents.describe({"command": "delete -n web -f -", "manifest": two}) == "xóa ConfigMap a (namespace web), Deployment b (namespace web)"
+    assert incidents.describe({"command": "rollout restart deployment/x"}) is None
+    assert incidents.describe({"command": "apply -f -", "manifest": "a: [b"}) is None
+
+
 def test_investigation_lost_on_restart_is_released(flow, users):
     iid = _web_incident(users)
     with db.session() as conn:

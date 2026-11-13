@@ -235,6 +235,8 @@ function approvalCard(a, onDecide, streaming, context) {
     line.addEventListener("click", () => { detail.hidden = !detail.hidden; });
     return h("div", { class: `tool-row decided s-${failed ? "error" : a.status}` }, line,
       a.status === "denied" && h("div", { class: "tool-note" }, a.deny_reason ? "Ghi chú cho agent: " + a.deny_reason : "Không kèm ghi chú, agent dừng ở đây."),
+      a.status === "expired" && h("div", { class: "tool-note" }, (a.reasons && a.reasons.length ? "Cần duyệt vì: " + a.reasons.join("; ").replace(/[.\s]+$/, "") + ". " : "")
+        + `Hết hạn lúc ${fmtTime(a.expires_at)}; thẻ hết hạn không duyệt được nữa, cần đề xuất lại.`),
       a.note && h("div", { class: "tool-note" }, "Ghi chú cho agent: " + a.note), detail);
   }
   const dryError = a.dry_run && a.dry_run.error;
@@ -354,7 +356,7 @@ function chatView(main) {
     thread.classList.toggle("focus", on);
     focusBtn.textContent = on ? "Hiện hành động" : "Ẩn hành động";
     focusBtn.setAttribute("aria-pressed", String(on));
-    focusBtn.title = on ? "Hiện các lệnh agent đã chạy" : "Chỉ giữ câu trả lời, thẻ chờ duyệt và câu hỏi";
+    focusBtn.title = on ? "Hiện các lệnh agent đã chạy" : "Chỉ giữ câu trả lời, thẻ duyệt, hành động khắc phục và câu hỏi";
   };
   syncFocus(Boolean(store.get("focusView", false)));
   focusBtn.addEventListener("click", () => { const on = !thread.classList.contains("focus"); store.set("focusView", on || null); syncFocus(on); });
@@ -447,10 +449,20 @@ function chatView(main) {
     // Hành động sự cố đề xuất sau khi điều tra xong đi thẳng qua gateway, không nằm trong trace của lượt.
     const fixes = m.incident_actions || [];
     if (fixes.length) {
-      flow.append(h("div", { class: "small muted incident-fix-head" }, "Hành động khắc phục của sự cố"));
+      // Câu trả lời ở trên viết trong lượt chỉ đọc ("chưa chạy lệnh ghi nào"); lệnh khắc phục đến sau, phải nói rõ để không bị đọc là chưa có đề xuất.
+      flow.append(h("div", { class: "small muted incident-fix-head" }, "Hành động khắc phục của sự cố"),
+        h("div", { class: "small muted incident-fix-lead" }, `Sau khi điều tra (chỉ đọc), kagent đưa ${fixes.length} lệnh khắc phục qua gateway:`));
       for (const a of fixes) {
-        if (a.approval_id && byId.has(a.approval_id)) { flow.append(approvalCard(byId.get(a.approval_id), decide)); byId.delete(a.approval_id); continue; }
-        flow.append(h("div", { class: "incident-fix" }, a.why && h("div", { class: "small" }, a.why), toolRow({ ...a, env: m.env }),
+        const label = a.why || a.summary;
+        if (a.approval_id && byId.has(a.approval_id)) {
+          const req = byId.get(a.approval_id);
+          byId.delete(a.approval_id);
+          flow.append(h("div", { class: "incident-fix" }, approvalCard({ ...req, why: req.why || label }, decide),
+            req.status === "expired" && h("button", { type: "button", class: "ghost small-btn",
+              onclick: () => send(`Đề xuất lại lệnh khắc phục đã hết hạn duyệt: ${label || argSummary(a.args)}`) }, "Nhờ agent đề xuất lại")));
+          continue;
+        }
+        flow.append(h("div", { class: "incident-fix" }, label && h("div", { class: "small" }, label), toolRow({ ...a, env: m.env }),
           a.status === "ok" && h("div", { class: "small muted" }, (a.auto ? "Tự chạy" : "Đã chạy")
             + (a.verified === true ? " · đã hết cảnh báo" : a.verified === false ? " · cảnh báo vẫn còn" : ""))));
       }
