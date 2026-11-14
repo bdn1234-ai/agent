@@ -482,13 +482,15 @@ function chatView(main) {
           const req = byId.get(a.approval_id);
           byId.delete(a.approval_id);
           flow.append(h("div", { class: "incident-fix" }, approvalCard({ ...req, why: req.why || label }, decide),
-            req.status === "expired" && h("button", { type: "button", class: "ghost small-btn",
-              onclick: () => send(`Đề xuất lại lệnh khắc phục đã hết hạn duyệt: ${label || argSummary(a.args)}`) }, "Nhờ agent đề xuất lại")));
+            req.status === "expired" && a.waiting && h("button", { type: "button", class: "ghost small-btn",
+              onclick: () => send(`Đề xuất lại lệnh khắc phục đã hết hạn duyệt: ${label || argSummary(a.args)}`) }, "Nhờ agent đề xuất lại"),
+            a.settled && h("div", { class: "small muted" }, `Không còn chờ: ${a.settled}.`)));
           continue;
         }
         flow.append(h("div", { class: "incident-fix" }, label && h("div", { class: "small" }, label), toolRow({ ...a, env: m.env }),
           a.status === "ok" && h("div", { class: "small muted" }, (a.auto ? "Tự chạy" : "Đã chạy")
-            + (a.verified === true ? " · đã hết cảnh báo" : a.verified === false ? " · cảnh báo vẫn còn" : ""))));
+            + (a.verified === true ? " · đã hết cảnh báo" : a.verified === false ? " · cảnh báo vẫn còn" : "")),
+          a.settled && h("div", { class: "small muted" }, `Không còn chờ: ${a.settled}.`)));
       }
     }
     for (const a of byId.values()) flow.append(approvalCard(a, decide));

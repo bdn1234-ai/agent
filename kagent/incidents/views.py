@@ -98,12 +98,14 @@ def actions_by_episode(conn, incident_id: str, episodes: list[dict]) -> dict[str
 
     Hành động lưu trước khi có episode_id: theo lượt của lệnh chờ duyệt, không có thì lượt cuối bắt đầu trước lúc đề xuất.
     """
-    inc = conn.execute("SELECT tenant_id FROM incident WHERE id=?", (incident_id,)).fetchone()
+    inc = conn.execute("SELECT * FROM incident WHERE id=?", (incident_id,)).fetchone()
     if inc is None or not episodes:
         return {}
     ids = {e["id"] for e in episodes}
     out: dict[str, list[dict]] = {}
-    for a in actions.rows(conn, incident_id, "investigation"):
+    rows = actions.rows(conn, incident_id)
+    pending = {w["action_id"] for w in waiting(conn, {**dict(inc), "investigating": incident_id in _running}) if w.get("action_id")}
+    for a in [r for r in rows if r["origin"] == "investigation"]:
         ep = a["episode_id"]
         if ep is None and a["approval_id"]:
             req = conn.execute("SELECT episode_id FROM approval_request WHERE id=?", (a["approval_id"],)).fetchone()
@@ -118,9 +120,22 @@ def actions_by_episode(conn, incident_id: str, episodes: list[dict]) -> dict[str
         except ValueError:
             result = a["result"]  # bị cắt 2000 ký tự nên không còn là JSON
         out.setdefault(ep, []).append({**{k: a[k] for k in ("tool", "args", "why", "status", "auto", "risk_tier", "reasons", "approval_id", "verified")},
-                                       "result": result, "summary": describe(a["args"]),
+                                       "result": result, "summary": describe(a["args"]), "waiting": a["id"] in pending,
+                                       "settled": None if a["id"] in pending or a["status"] in ("ok", "pending") else _settled(a, rows, inc),
                                        "action_class": "write" if _is_write(conn, inc["tenant_id"], a["tool"]) else "read"})
     return out
+
+
+def _settled(a: dict, rows: list[dict], inc) -> str:
+    """Vì sao lệnh hết hạn, bị từ chối hay chạy lỗi không còn chờ ai: để hội thoại cũ không còn mời đề xuất lại."""
+    label = _label(a)
+    if a["superseded_by"] == "dismissed":
+        return "đã bỏ qua"
+    if a["superseded_by"] or any(_label(r) == label and r["status"] in ("ok", "pending") and r["proposed_at"] > a["proposed_at"] for r in rows):
+        return "đã có lần chạy hoặc đề xuất sau"
+    if inc["status"] != "open":
+        return "sự cố đã hết" if inc["status"] == "resolved" else "sự cố đã đóng"
+    return "đã có lệnh tương tự ở lượt sau"
 
 
 def view(row: dict) -> dict:

@@ -897,3 +897,34 @@ def test_summary_tasks_marked_done_and_incident_state_reaches_chat_context(flow,
         agent.run_task(conn, users["alice"].tenant, uid, "giờ làm gì tiếp", conversation_id=cid)
     assert "<incident" in seen["turn"] and "việc cần người: Báo đội hạ tầng" in seen["turn"] and "đã xong (người đánh dấu): Đẩy lại image" in seen["turn"]
     assert "Tóm tắt: tóm tắt lần 3" in seen["turn"] and "<incident" not in seen["system"]  # system prompt không đổi theo sự cố
+
+
+def test_old_expired_proposal_in_chat_settles_once_rerun_and_chat_fix_triggers_verify(flow, users):
+    from test_approval_flow import Scripted
+    iid = _web_incident(users)
+    llm.set_provider(Reporting(0.6, [RESTART], verdict=False))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+        conn.execute("UPDATE approval_request SET expires_at=?", (db.later(seconds=-1),))
+        gateway.expire_approvals(conn, tenant(users))
+        incidents.follow_up(conn, tenant(users))
+    cid = flow.get(f"/api/incidents/{iid}").json()["conversation_id"]
+    fix = flow.get(f"/api/conversations/{cid}").json()["messages"][0]["incident_actions"][0]
+    assert fix["status"] == "expired" and fix["waiting"] and fix["settled"] is None
+
+    action_id = next(w["action_id"] for w in flow.get(f"/api/incidents/{iid}").json()["waiting"] if w["kind"] == "retry")
+    req = flow.post(f"/api/incidents/{iid}/actions/{action_id}/retry").json()
+    flow.post(f"/api/approvals/{req['approval_id']}/decide", json={"action": "approve_once"})
+    fix = flow.get(f"/api/conversations/{cid}").json()["messages"][0]["incident_actions"][0]
+    assert not fix["waiting"] and fix["settled"] == "đã có lần chạy hoặc đề xuất sau"
+
+    with db.session() as conn:
+        conn.execute("UPDATE incident SET stage='needs_human', verify_due=NULL WHERE id=?", (iid,))
+    llm.set_provider(Scripted(lambda call_tool: call_tool("k8s.kubectl_write", {"command": "rollout restart deployment/web -n default"})["status"]))
+    with db.session() as conn:
+        uid = conn.execute("SELECT id FROM app_user WHERE username='alice'").fetchone()["id"]
+        agent.run_task(conn, users["alice"].tenant, uid, "khởi động lại web", conversation_id=cid)
+        approval = conn.execute("SELECT approval_id FROM incident_action WHERE incident_id=? AND origin='chat'", (iid,)).fetchone()["approval_id"]
+    flow.post(f"/api/approvals/{approval}/decide", json={"action": "approve_once"})
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["stage"] == "verifying" and inc["verify_due"]  # sửa trong chat xong thì kagent xác minh cảnh báo đã hết chưa

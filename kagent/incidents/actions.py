@@ -197,6 +197,15 @@ def record_chat_action(conn, ctx, step: dict) -> None:
     with db.tx(conn):
         if conn.execute("SELECT 1 FROM incident WHERE id=? AND tenant_id=?", (ctx.incident_id, ctx.tenant_id)).fetchone():
             _insert(conn, ctx.tenant_id, ctx.incident_id, "chat", ctx.user_id, step, ctx.episode_id, step.get("why"))
+            if step["status"] == "ok":
+                _verify_after_fix(conn, ctx.tenant_id, ctx.incident_id)
+
+
+def _verify_after_fix(conn, tenant_id: str, incident_id: str) -> None:
+    """Người chạy lệnh khắc phục trong chat: chờ verify_minutes rồi xem cảnh báo đã hết chưa, như lệnh do điều tra đề xuất."""
+    conn.execute("UPDATE incident SET stage='verifying', verify_due=?, updated_at=? WHERE id=? AND status='open' "
+                 "AND stage IN ('new','reported','needs_human','error','handled')",
+                 (_later(settings(conn, tenant_id)["verify_minutes"] * 60), db.iso(), incident_id))
 
 
 def _sync(conn, tenant_id: str, incident_id: str) -> None:
@@ -217,6 +226,9 @@ def _sync(conn, tenant_id: str, incident_id: str) -> None:
         if row["origin"] == "investigation":
             changed = True
             executed = executed or new["status"] == "ok"
+        elif new["status"] == "ok":
+            with db.tx(conn):
+                _verify_after_fix(conn, tenant_id, incident_id)
     inc = conn.execute("SELECT stage FROM incident WHERE id=?", (incident_id,)).fetchone()
     if changed and inc["stage"] == "awaiting_approval":
         stage = "verifying" if executed else "awaiting_approval" if open_ else "needs_human"
