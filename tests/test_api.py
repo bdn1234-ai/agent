@@ -125,6 +125,18 @@ def test_token_quota_blocks_runs(users):
     assert alice.post("/api/runs", json={"task": "xem pod"}).status_code == 429
 
 
+def test_admin_sets_quota_and_members_only_read(users):
+    admin, alice = users["admin"], users["alice"]
+    q = alice.get("/api/quota").json()
+    assert q["token_quota_daily"] == 2000000 and q["tokens_today"] == 0 and not q["can_manage"] and q["resets_at"].endswith("T00:00:00+00:00")
+    assert alice.patch("/api/tenant", json={"token_quota_daily": 5}).status_code == 403
+    assert admin.patch("/api/tenant", json={"token_quota_daily": -1}).status_code == 422
+    assert admin.patch("/api/tenant", json={"token_quota_daily": 0, "write_quota_daily": 7}).status_code == 200
+    q = admin.get("/api/quota").json()
+    assert (q["token_quota_daily"], q["write_quota_daily"], q["can_manage"]) == (0, 7, True)
+    assert admin.post("/api/runs", json={"task": "xem pod"}).status_code == 429
+
+
 def test_metrics_shape(users):
     alice = users["alice"]
     alice.run("xem pod")

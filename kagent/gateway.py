@@ -210,7 +210,7 @@ def namespace_of(args: dict) -> str | None:
     return None
 
 
-def _writes_today(conn, tenant_id: str) -> int:
+def writes_today(conn, tenant_id: str) -> int:
     start = db.now().date().isoformat()
     return conn.execute(
         "SELECT count(*) c FROM tool_call_audit a JOIN tool_registry t ON t.tool=a.tool AND t.tenant_id=a.tenant_id "
@@ -331,7 +331,7 @@ def _invoke(conn, ctx: CallContext, tool_name: str, args: dict) -> dict:
     if meta["action_class"] != "read":
         if tenant["change_freeze"]:
             forced.append("đang trong change freeze")
-        if _writes_today(conn, ctx.tenant_id) >= tenant["write_quota_daily"]:
+        if writes_today(conn, ctx.tenant_id) >= tenant["write_quota_daily"]:
             forced.append("vượt quota ghi trong ngày")
 
     policy = get_policy(conn, ctx.tenant_id)

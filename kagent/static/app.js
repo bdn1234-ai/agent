@@ -387,7 +387,8 @@ async function incidentDetail(main, id) {
         const why = w.source === "provider" ? "Provider LLM báo hết quota hoặc đang giới hạn tốc độ." : "Tenant đã dùng hết quota token trong ngày.";
         return h("div", { class: "ix-item" }, h("span", { class: "ix-dot bad", "aria-hidden": "true" }),
           h("div", {}, h("strong", {}, "Điều tra đang dừng vì hết quota"), h("span", { class: "small" }, `${why} Bấm Tiếp tục sau khi có quota lại (admin tăng quota, sang ngày mới) hoặc đã đổi sang provider/model khác.`),
-            w.source === "provider" && h("span", { class: "small" }, w.text)),
+            w.source === "provider" ? h("span", { class: "small" }, w.text)
+              : h("a", { href: "#", class: "small", onclick: (e) => { e.preventDefault(); go("settings", undefined, "quota"); } }, isAdmin() ? "Xem và tăng quota ở Cài đặt → Quota" : "Xem quota ở Cài đặt → Quota")),
           h("div", { class: "ix-acts" }, h("button", { type: "button", class: "small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã tiếp tục điều tra") }, "Tiếp tục")));
       }
       const isError = w.kind === "error";
@@ -1523,7 +1524,33 @@ async function refreshMe() {
   renderShell();
 }
 
-VIEWS.settings = (main) => subTabs(main, [["policy", "Chính sách", policyView], ["alerts", "Cảnh báo", alertSettingsView], ...(state.me.is_org_admin ? [["llm", "LLM", llmSettingsView], ["proxy", "Proxy", proxySettingsView]] : [])]);
+async function quotaView(main) {
+  const q = await api("GET", "/api/quota");
+  const fmt = (n) => Number(n).toLocaleString("vi-VN");
+  const meter = (used, limit) => {
+    const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 100;
+    return h("div", { class: "quota-meter " + (pct >= 100 ? "bad" : pct >= 80 ? "warn" : ""), role: "meter", "aria-valuemin": "0", "aria-valuemax": String(limit), "aria-valuenow": String(used) },
+      h("span", { style: `width:${pct}%` }));
+  };
+  const field = (key, label, hint) => {
+    const input = h("input", { type: "number", min: "0", step: key === "token_quota_daily" ? "100000" : "1", value: q[key], disabled: !q.can_manage, "aria-label": label });
+    return { input, el: h("label", { class: "field" }, label, input, h("span", { class: "small" }, hint)) };
+  };
+  const tokens = field("token_quota_daily", "Quota token/ngày", "Tổng token của mọi lượt chat, điều tra sự cố trong tenant. 0 = chặn mọi lượt gọi model.");
+  const writes = field("write_quota_daily", "Quota lệnh ghi/ngày", "Số lệnh ghi chạy thành công; vượt thì mọi lệnh ghi phải hỏi người duyệt.");
+  const save = guard(async () => {
+    await api("PATCH", "/api/tenant", { token_quota_daily: Number(tokens.input.value), write_quota_daily: Number(writes.input.value) });
+    toast("Đã lưu quota"); renderShell();
+  });
+  main.append(h("div", { class: "card" },
+    h("p", { class: "small" }, `Đếm lại từ đầu lúc ${fmtTime(q.resets_at)}. Sự cố đang "Chờ quota" không tự chạy lại: sau khi tăng quota, mở sự cố và bấm Tiếp tục.`),
+    h("div", { class: "quota-row" }, h("strong", {}, "Token hôm nay"), h("span", { class: "small" }, `${fmt(q.tokens_today)} / ${fmt(q.token_quota_daily)}`), meter(q.tokens_today, q.token_quota_daily)),
+    h("div", { class: "quota-row" }, h("strong", {}, "Lệnh ghi hôm nay"), h("span", { class: "small" }, `${fmt(q.writes_today)} / ${fmt(q.write_quota_daily)}`), meter(q.writes_today, q.write_quota_daily)),
+    h("div", { class: "fields" }, tokens.el, writes.el),
+    q.can_manage ? h("div", { class: "row" }, h("button", { onclick: save }, "Lưu")) : h("p", { class: "small muted" }, "Chỉ admin của tenant sửa được quota.")));
+}
+
+VIEWS.settings = (main) => subTabs(main, [["policy", "Chính sách", policyView], ["quota", "Quota", quotaView], ["alerts", "Cảnh báo", alertSettingsView], ...(state.me.is_org_admin ? [["llm", "LLM", llmSettingsView], ["proxy", "Proxy", proxySettingsView]] : [])]);
 
 async function proxySettingsView(main) {
   let st = await api("GET", "/api/settings/proxy");

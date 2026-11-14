@@ -441,3 +441,10 @@ input.narrow { width: 70px; }
   .ix-inc { grid-template-columns: 4px minmax(0, 1fr); } .ix-stripe { grid-row: 1 / span 3; }
   .ix-state, .ix-when { grid-column: 2; } .ix-state { display: flex; gap: 6px; } .ix-when { text-align: left; }
 }
+
+/* Cài đặt → Quota */
+.quota-row { display: grid; grid-template-columns: 170px auto minmax(120px, 1fr); gap: 12px; align-items: center; margin: 10px 0; }
+.quota-meter { height: 8px; border-radius: 999px; background: var(--code); overflow: hidden; }
+.quota-meter span { display: block; height: 100%; background: var(--accent); }
+.quota-meter.warn span { background: var(--warn); } .quota-meter.bad span { background: var(--bad); }
+@media (max-width: 640px) { .quota-row { grid-template-columns: 1fr auto; } .quota-meter { grid-column: 1 / -1; } }

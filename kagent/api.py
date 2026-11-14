@@ -1721,6 +1721,8 @@ def policy_put(body: PolicyBody, t: Tenant = Depends(current_tenant), conn=Depen
 
 
 class TenantSettings(BaseModel):
+    token_quota_daily: int | None = Field(None, ge=0, le=1_000_000_000)  # 0 = chặn mọi lượt gọi model
+    write_quota_daily: int | None = Field(None, ge=0, le=100_000)
     auto_promote: bool | None = None
     change_freeze: bool | None = None
     self_approve: bool | None = None
@@ -1731,6 +1733,11 @@ class TenantSettings(BaseModel):
 @app.patch("/api/tenant")
 def tenant_patch(body: TenantSettings, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
     t.require_admin()
+    for column in ("token_quota_daily", "write_quota_daily"):
+        value = getattr(body, column)
+        if value is not None:
+            conn.execute(f"UPDATE tenant SET {column}=? WHERE id=?", (value, t.tenant_id))
+            log.info("tenant %s: %s đặt %s=%s", t.tenant_id, t.principal.username, column, value)
     if body.auto_promote is not None:
         conn.execute("UPDATE tenant SET auto_promote=? WHERE id=?", (int(body.auto_promote), t.tenant_id))
     if body.change_freeze is not None:
@@ -1753,6 +1760,16 @@ def tenant_patch(body: TenantSettings, t: Tenant = Depends(current_tenant), conn
         conn.execute("UPDATE tenant SET auto_mode=? WHERE id=?", (json.dumps(cfg, ensure_ascii=False), t.tenant_id))
         log.info("tenant %s: %s đặt auto_mode=%s", t.tenant_id, t.principal.username, cfg)
     return policy_get(t, conn)
+
+
+@app.get("/api/quota")
+def quota_get(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    r = conn.execute("SELECT token_quota_daily, write_quota_daily FROM tenant WHERE id=?", (t.tenant_id,)).fetchone()
+    today = db.now().date()
+    return {"token_quota_daily": r["token_quota_daily"], "tokens_today": agent_mod.tokens_today(conn, t.tenant_id),
+            "write_quota_daily": r["write_quota_daily"], "writes_today": gateway.writes_today(conn, t.tenant_id),
+            "resets_at": db.iso(datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=db.now().tzinfo)),
+            "can_manage": t.is_admin}
 
 
 class Simulate(BaseModel):
