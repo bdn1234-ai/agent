@@ -33,9 +33,8 @@ Bản tóm tắt dựa vào dòng sự kiện cho chi tiết, nhưng hiện mỗ
 
 ### 2. Sự cố lặp lại cùng nguyên nhân
 
-Trong hai ngày 13–14/11, namespace `svc-document` mở thêm ít nhất 7 sự cố riêng cho cùng một nhóm lỗi (`40ae7855`, `a2cc5e77`,
-`d02b31ca`, `0a6ec4f5`, `0bdb4d99` ngày 13/11; `6e7582e4`, `c149d1e8` ngày 14/11), mỗi sự cố điều tra lại từ đầu, trong khi sự cố
-gốc `b70c928e` (12/11) vẫn mở.
+Từ 12/11 tới 14/11, ngoài sự cố gốc `b70c928e` (vẫn mở), namespace `svc-document` mở thêm 13 sự cố riêng cho cùng một nhóm lỗi
+(ví dụ `40ae7855`, `a2cc5e77`, `6e7582e4`, `c149d1e8`, `c7130138`). Mỗi sự cố điều tra lại từ đầu; nhiều sự cố dừng vì hết quota.
 
 - Tìm sự cố cùng namespace và cùng nhóm cảnh báo trong 30 ngày; hiện "lặp lại N lần" và danh sách sự cố liên quan.
 - Cảnh báo bắn lại khi sự cố cũ còn mở hoặc vừa hết: gợi ý gộp, hoặc đưa vào hội thoại cũ thay vì mở hội thoại mới.
