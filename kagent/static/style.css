@@ -336,6 +336,9 @@ input.narrow { width: 70px; }
 .result-table td, .result-table th { padding: 2px 8px; white-space: nowrap; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
 .thread.focus .flow > .tool-row:not(.decided) { display: none; }
 .incident-fix-head { margin: 10px 0 4px; font-weight: 600; }
+.incident-summary { margin: 12px 0; border-left: 3px solid var(--accent); }
+.incident-summary .tool-head { gap: 8px; flex-wrap: wrap; }
+.incident-summary .summary-text { margin: 6px 0 0; line-height: 1.55; }
 .incident-fix { margin: 0 0 6px; }
 .live-status { min-height: 20px; margin-top: 4px; }
 

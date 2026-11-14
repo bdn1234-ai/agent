@@ -718,6 +718,8 @@ def conversation(conversation_id: str, t: Tenant = Depends(current_tenant), conn
         fixes = incidents.actions_by_episode(conn, c["incident_id"], [{"id": r["id"], "started_at": r["started_at"]} for r in rs])
         for m in messages:
             m["incident_actions"] = fixes.get(m["id"], [])
+        inc = conn.execute("SELECT * FROM incident WHERE id=?", (c["incident_id"],)).fetchone()
+        c = {**c, "incident_summary": incidents.summary_view(conn, inc) if inc else None}
     return {**c, "running": running, "queued": queued, "messages": messages}
 
 
@@ -1578,6 +1580,20 @@ def incident_investigate(incident_id: str, t: Tenant = Depends(current_tenant), 
         _incident_call(lambda: incidents.reinvestigate(conn, t.tenant_id, incident_id))
     incidents.start_investigation(t.tenant_id, incident_id)
     return {"ok": True}
+
+
+@app.get("/api/incidents/{incident_id}/summary")
+def incident_summary_get(incident_id: str, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    inc = conn.execute("SELECT * FROM incident WHERE id=? AND tenant_id=?", (incident_id, t.tenant_id)).fetchone()
+    if inc is None:
+        raise HTTPException(404, "không tìm thấy sự cố")
+    return incidents.summary_view(conn, inc)
+
+
+@app.post("/api/incidents/{incident_id}/summary")
+def incident_summary_now(incident_id: str, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    t.require_writer()
+    return _incident_call(lambda: incidents.summarize(conn, t.tenant_id, incident_id))
 
 
 @app.get("/api/alert-settings")

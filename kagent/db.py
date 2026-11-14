@@ -323,8 +323,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tenant ADD COLUMN auto_mode TEXT NOT NULL DEFAULT '{}'")  # luật của classifier (automode.py); grant_policy cũ không còn dùng
     if "incident_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(conversation)")}:
         conn.execute("ALTER TABLE conversation ADD COLUMN incident_id TEXT")  # hội thoại điều tra của sự cố: mọi thành viên tenant mở được
-    if "conversation_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(incident)")}:
+    incident_cols = {r["name"] for r in conn.execute("PRAGMA table_info(incident)")}
+    if "conversation_id" not in incident_cols:
         conn.execute("ALTER TABLE incident ADD COLUMN conversation_id TEXT")
+    # Tóm tắt cho lãnh đạo, viết lại khi sự cố yên sau hoạt động mới; summary_basis là mốc hoạt động cuối mà bản tóm tắt đã tính tới.
+    for column in ("summary", "summary_at", "summary_basis"):
+        if column not in incident_cols:
+            conn.execute(f"ALTER TABLE incident ADD COLUMN {column} TEXT")
     if "alert_settings" not in {r["name"] for r in conn.execute("PRAGMA table_info(tenant)")}:
         conn.execute("ALTER TABLE tenant ADD COLUMN alert_settings TEXT NOT NULL DEFAULT '{}'")  # luồng tự xử lý cảnh báo (incidents.py)
     registry = {r["name"] for r in conn.execute("PRAGMA table_info(tool_registry)")}

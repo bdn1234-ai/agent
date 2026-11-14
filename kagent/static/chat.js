@@ -221,6 +221,29 @@ function commandView(a) {
     : h("div", {}, h("span", { class: "muted" }, k + ": "), h("code", {}, typeof v === "string" ? v : JSON.stringify(v)))));
 }
 
+// Tóm tắt cho lãnh đạo của sự cố, máy chủ viết lại khi sự cố yên sau hoạt động mới (như session recap của Claude Code).
+function summaryCard(s, incidentId) {
+  const card = h("div", { class: "card incident-summary", role: "region", "aria-label": "Tóm tắt sự cố" });
+  let cur = s || {};
+  const paint = (next) => {
+    cur = next || {};
+    const meta = cur.running ? "đang viết lại…" : cur.at ? `cập nhật ${fmtTime(cur.at)}` + (cur.stale ? " · có hoạt động mới, sẽ viết lại khi sự cố yên" : "")
+      : "sẽ tự viết khi sự cố yên sau lượt điều tra";
+    card.replaceChildren(
+      h("div", { class: "tool-head" }, h("strong", {}, "Tóm tắt sự cố"), h("span", { class: "small muted" }, meta), h("span", { class: "spacer" }),
+        h("button", { type: "button", class: "ghost small-btn", onclick: guard(async (e) => {
+          const btn = e.currentTarget;
+          btn.textContent = "Đang tóm tắt…";
+          try { paint(await api("POST", `/api/incidents/${incidentId}/summary`)); } catch (err) { btn.textContent = "Tóm tắt ngay"; throw err; }
+        }) }, "Tóm tắt ngay")),
+      cur.text && h("p", { class: "summary-text" }, cur.text));
+  };
+  paint(cur);
+  card.markStale = () => { if (cur.text) paint({ ...cur, stale: true }); };
+  card.refresh = async () => { paint(await api("GET", `/api/incidents/${incidentId}/summary`)); };
+  return card;
+}
+
 // Thẻ duyệt: chờ duyệt thì đầy đủ (mô tả, lệnh, nút, ghi chú, chi tiết gập); đã quyết thì gọn như một dòng lệnh.
 function approvalCard(a, onDecide, streaming, context) {
   const done = a.status !== "pending";
@@ -317,6 +340,7 @@ function questionCard(step, answerable, onAnswer) {
 
 function chatView(main) {
   const thread = h("div", { class: "thread" });
+  let recap = null;  // thẻ tóm tắt sự cố, luôn ở cuối hội thoại
   const scroller = h("div", { class: "scroller" }, thread);
   const toBottom = iconButton("down_arrow", "Xuống cuối", () => { scroller.scrollTop = scroller.scrollHeight; }, "to-bottom hidden");
   let stick = true;
@@ -586,6 +610,7 @@ function chatView(main) {
     const status = h("div", { class: "live-status small muted", role: "status" });
     const liveEl = h("div", { class: "msg assistant live" }, flow, status);
     thread.append(liveEl);
+    if (recap) { recap.markStale(); thread.append(recap); }
     stick = true;
     scroll();
 
@@ -810,6 +835,16 @@ function chatView(main) {
             h("button", { type: "button", class: "ghost small-btn", onclick: () => go("incidents", undefined, data.incident_id) }, "Xem sự cố")));
         }
         data.messages.forEach(addMessage);
+        if (data.incident_id) {
+          recap = summaryCard(data.incident_summary, data.incident_id);
+          thread.append(recap);
+          // Như Claude Code: người quay lại trang thấy ngay bản mới máy chủ đã viết trong lúc vắng.
+          const onVisible = () => {
+            if (!recap.isConnected) { document.removeEventListener("visibilitychange", onVisible); return; }
+            if (document.visibilityState === "visible") recap.refresh().catch(() => {});
+          };
+          document.addEventListener("visibilitychange", onVisible);
+        }
         if (data.messages.some((m) => m.approvals.some((a) => a.status === "pending"))) pollApprovals();
         if (data.running) attachLive(data.messages.length).catch((e) => toast(e.message, true));
         else if (data.queued) waitQueued(data.queued);

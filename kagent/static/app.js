@@ -312,6 +312,7 @@ async function incidentDetail(main, id) {
         closeNote, h("button", { type: "button", class: "danger small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/close`, { note: closeNote.value }), "Đã đóng sự cố") }, "Đóng")));
     const openChat = d.conversation_id && h("button", { type: "button", class: "ghost small-btn", onclick: () => go("chat", d.conversation_id) },
       busyNow ? "Xem agent đang điều tra" : "Mở cuộc điều tra trong chat");
+    const recap = d.summary && summaryCard(d.summary, id);
     const cause = h("div", { class: "card" }, h("div", { class: "tool-head" }, h("h3", {}, "Nguyên nhân"), h("span", { class: "spacer" }), openChat),
       busyNow ? busy(d.queued === "slot" ? "Đang chờ tới lượt điều tra: các cuộc điều tra khác đang chạy…" : "Agent đang điều tra bằng các lệnh chỉ đọc…")
         : d.episode_id ? [h("p", {}, d.root_cause || "Chưa rõ nguyên nhân."),
@@ -352,7 +353,7 @@ async function incidentDetail(main, id) {
       h("ul", { class: "timeline" }, d.timeline.map((e) => h("li", { class: "tl-" + e.kind }, h("span", { class: "small" }, fmtTime(e.at)), " ",
         TL_CLASS[e.kind] ? h("span", { class: "badge " + TL_CLASS[e.kind] }, { alert: "cảnh báo", alert_resolved: "hết", fix: "khắc phục", verified: "xác minh", resolved: "đã hết" }[e.kind]) : null, " ", e.text))));
     box.replaceChildren();
-    appendKids(box, [head, cause, alerts, actions, timeline]);
+    appendKids(box, [head, recap, cause, alerts, actions, timeline]);
     if (d.status === "open" && (busyNow || ["new", "awaiting_approval", "verifying"].includes(d.stage))) refreshLater(8000, token, load);
   }
   await load();
@@ -390,6 +391,10 @@ async function alertSettingsView(main) {
     h("table", { class: "incident-table" }, h("thead", {}, h("tr", {}, h("th", {}, "Môi trường"), h("th", {}, "Tự xử lý"))), h("tbody", {}, envRows)),
     h("label", { class: "field" }, "Luật tự xử lý (mỗi dòng một luật). Auto mode coi các luật này như lời người dùng khi xét hành động đề xuất: chỉ việc nằm trong luật mới được tự chạy", autoRules),
     h("div", { class: "row" }, num("max_auto_actions_per_hour", "Số lần tự xử lý tối đa mỗi sự cố mỗi giờ"), num("verify_minutes", "Xác minh sau (phút)")),
+    h("h3", {}, "Tóm tắt sự cố"),
+    check(cfg.summary, "enabled", "Tự viết tóm tắt cho lãnh đạo khi sự cố yên sau hoạt động mới (hiện ở cuối hội thoại điều tra và trang sự cố)"),
+    h("label", { class: "field" }, "Viết lại sau khi yên (phút)", h("input", { type: "number", min: "1", max: "120", value: cfg.summary.idle_minutes, disabled: dis,
+      oninput: (e) => { cfg.summary.idle_minutes = Number(e.target.value); } })),
     info.can_manage ? h("div", { class: "row" }, h("button", { type: "button", onclick: save }, "Lưu"), h("button", { type: "button", class: "ghost", onclick: pollNow }, "Lấy cảnh báo ngay"))
       : h("div", { class: "small muted" }, "Chỉ tenant admin được đổi cài đặt này.")));
 }

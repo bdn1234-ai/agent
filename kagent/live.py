@@ -9,6 +9,8 @@ import contextvars
 import threading
 from dataclasses import dataclass, field
 
+from . import db
+
 
 class StopFlag(threading.Event):
     """Cờ dừng của một lượt; by là người bấm dừng (ghi vào trace của episode)."""
@@ -76,13 +78,22 @@ def start(conversation_id: str, run_id: str, task: str, continuation: bool = Fal
     return run
 
 
+_finished: dict[str, str] = {}  # hội thoại → lúc lượt cuối xong (ISO); episode chỉ lưu lúc bắt đầu
+
+
 def finish(run: Run) -> None:
     with run.cond:
         run.done = True
         run.cond.notify_all()
     with _lock:
+        _finished[run.conversation_id] = db.iso()
         if _runs.get(run.conversation_id) is run:
             del _runs[run.conversation_id]
+
+
+def finished_at(conversation_id: str) -> str | None:
+    with _lock:
+        return _finished.get(conversation_id)
 
 
 def current(conversation_id: str) -> Run | None:

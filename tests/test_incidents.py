@@ -1,11 +1,12 @@
 """Luồng tự xử lý cảnh báo: poll, gom nhóm, điều tra chỉ đọc, hành động qua gateway, xác minh, giao diện API."""
 import json
+from datetime import timedelta
 
 import pytest
 
 import fakes
 from conftest import create_connections
-from kagent import agent, connections, db, gateway, incidents, llm
+from kagent import agent, connections, db, gateway, incidents, live, llm
 
 
 def am(labels, fp, state="active", starts="2026-11-12T08:00:00Z", summary=""):
@@ -455,6 +456,103 @@ def test_describe_names_manifest_objects():
     assert incidents.describe({"command": "delete -n web -f -", "manifest": two}) == "xóa ConfigMap a (namespace web), Deployment b (namespace web)"
     assert incidents.describe({"command": "rollout restart deployment/x"}) is None
     assert incidents.describe({"command": "apply -f -", "manifest": "a: [b"}) is None
+
+
+class Summarizing(Reporting):
+    def __init__(self):
+        super().__init__(0.6, [], verdict=False)
+        self.inputs = []
+
+    def incident_summary(self, data):
+        self.inputs.append(data)
+        return f"tóm tắt lần {len(self.inputs)}"
+
+
+@pytest.fixture()
+def clock(monkeypatch):
+    """Đẩy đồng hồ của kagent về sau thay cho việc chờ thật (episode chỉ cho ghi thêm nên không lùi mốc cũ được)."""
+    real, offset = db.now, [0]
+    monkeypatch.setattr(db, "now", lambda: real() + timedelta(minutes=offset[0]))
+
+    def advance(minutes):
+        offset[0] += minutes
+    return advance
+
+
+def test_summary_written_after_quiet_and_again_only_after_new_activity(flow, users, clock):
+    iid = _web_incident(users)
+    provider = Summarizing()
+    llm.set_provider(provider)
+    t = tenant(users)
+    with db.session() as conn:
+        incidents.investigate(conn, t, iid)
+        assert incidents.due_summaries(conn, t) == []  # vừa điều tra xong: chưa yên đủ 5 phút
+        clock(6)
+        due = incidents.due_summaries(conn, t)
+        assert [d[0] for d in due] == [iid]
+        view = incidents.summarize(conn, t, iid, due[0][1])
+        assert view["text"] == "tóm tắt lần 1" and not view["stale"]
+        data = provider.inputs[0]
+        assert data["turns"][0]["by"] == "kagent điều tra tự động" and data["incident"]["env"] == "dev" and data["previous_summary"] is None
+        assert incidents.due_summaries(conn, t) == []  # không có gì mới: không viết lại
+
+        incidents._event(conn, t, iid, "verified", "đã xác minh")
+        assert incidents.summary_view(conn, conn.execute("SELECT * FROM incident WHERE id=?", (iid,)).fetchone())["stale"]
+        assert incidents.due_summaries(conn, t) == []
+        clock(6)
+        due = incidents.due_summaries(conn, t)
+        assert [d[0] for d in due] == [iid]
+        incidents.summarize(conn, t, iid, due[0][1])
+        assert provider.inputs[1]["previous_summary"] == "tóm tắt lần 1"
+        # bản tóm tắt không bị coi là hoạt động, và không hiện trên dòng thời gian
+        assert incidents.due_summaries(conn, t) == []
+        assert all(e["kind"] != "summarized" for e in incidents.get(conn, t, iid)["timeline"])
+
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["summary"]["text"] == "tóm tắt lần 2"
+    conv = flow.get(f"/api/conversations/{inc['conversation_id']}").json()
+    assert conv["incident_summary"]["text"] == "tóm tắt lần 2"
+
+
+def test_summary_waits_for_running_turn_and_respects_settings(flow, users, clock):
+    iid = _web_incident(users)
+    llm.set_provider(Summarizing())
+    t = tenant(users)
+    with db.session() as conn:
+        incidents.investigate(conn, t, iid)
+        clock(6)
+        conv = conn.execute("SELECT conversation_id FROM incident WHERE id=?", (iid,)).fetchone()["conversation_id"]
+        run = live.start(conv, "r1", "hỏi thêm")
+        assert incidents.due_summaries(conn, t) == []  # đang có lượt chạy
+        live.finish(run)
+        assert incidents.due_summaries(conn, t) == []  # lượt vừa xong là hoạt động mới
+        clock(6)
+        assert [d[0] for d in incidents.due_summaries(conn, t)] == [iid]
+    r = users["admin"].put("/api/alert-settings", json={"enabled": True, "sources": ["am"], "investigate": False, "summary": {"enabled": False}})
+    assert r.status_code == 200 and r.json()["summary"] == {"enabled": False, "idle_minutes": 5}
+    with db.session() as conn:
+        assert incidents.due_summaries(conn, t) == []
+    assert users["admin"].put("/api/alert-settings", json={"summary": {"idle_minutes": 0}}).status_code == 400
+
+
+def test_summary_cut_at_sentence_end():
+    long = "Câu một nói chuyện gì xảy ra. " * 30
+    out = llm.check_summary({"summary": long})
+    assert len(out) <= llm.SUMMARY_MAX and out.endswith("xảy ra.")
+    assert llm.check_summary({"summary": "a; " * 400}).endswith("a…")
+    assert llm.check_summary({"summary": "  ngắn\n gọn  "}) == "ngắn gọn"
+    with pytest.raises(llm.LLMError):
+        llm.check_summary({"summary": " "})
+
+
+def test_summary_now_endpoint(flow, users):
+    iid = _web_incident(users)
+    llm.set_provider(Summarizing())
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+    r = flow.post(f"/api/incidents/{iid}/summary")
+    assert r.status_code == 200 and r.json()["text"] == "tóm tắt lần 1"
+    assert flow.get(f"/api/incidents/{iid}/summary").json()["text"] == "tóm tắt lần 1"
 
 
 def test_investigation_lost_on_restart_is_released(flow, users):
