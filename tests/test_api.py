@@ -125,16 +125,22 @@ def test_token_quota_blocks_runs(users):
     assert alice.post("/api/runs", json={"task": "xem pod"}).status_code == 429
 
 
-def test_admin_sets_quota_and_members_only_read(users):
+def test_org_admin_sets_quota_per_tenant_and_others_only_read(users):
     admin, alice = users["admin"], users["alice"]
     q = alice.get("/api/quota").json()
     assert q["token_quota_daily"] == 2000000 and q["tokens_today"] == 0 and not q["can_manage"] and q["resets_at"].endswith("T00:00:00+00:00")
-    assert alice.patch("/api/tenant", json={"token_quota_daily": 5}).status_code == 403
-    assert admin.patch("/api/tenant", json={"token_quota_daily": -1}).status_code == 422
-    assert admin.patch("/api/tenant", json={"token_quota_daily": 0, "write_quota_daily": 7}).status_code == 200
-    q = admin.get("/api/quota").json()
-    assert (q["token_quota_daily"], q["write_quota_daily"], q["can_manage"]) == (0, 7, True)
-    assert admin.post("/api/runs", json={"task": "xem pod"}).status_code == 429
+    assert alice.get("/api/quotas").status_code == 403
+    assert alice.put(f"/api/quotas/{alice.tenant}", json={"token_quota_daily": 5, "write_quota_daily": 5}).status_code == 403
+    alice.run("xem pod")
+    items = {i["name"]: i for i in admin.get("/api/quotas").json()["items"]}
+    assert set(items) == {"team-platform", "team-finance"} and items["team-platform"]["tokens_7d"] == items["team-platform"]["tokens_today"]
+    finance = items["team-finance"]["tenant_id"]
+    assert admin.put(f"/api/quotas/{finance}", json={"token_quota_daily": -1, "write_quota_daily": 1}).status_code == 422
+    assert admin.put("/api/quotas/khong-co", json={"token_quota_daily": 1, "write_quota_daily": 1}).status_code == 404
+    row = admin.put(f"/api/quotas/{alice.tenant}", json={"token_quota_daily": 0, "write_quota_daily": 7}).json()
+    assert (row["token_quota_daily"], row["write_quota_daily"]) == (0, 7)
+    assert {i["name"]: i["token_quota_daily"] for i in admin.get("/api/quotas").json()["items"]} == {"team-platform": 0, "team-finance": 2000000}
+    assert alice.post("/api/runs", json={"task": "xem pod"}).status_code == 429
 
 
 def test_metrics_shape(users):

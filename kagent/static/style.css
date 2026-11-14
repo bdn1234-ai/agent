@@ -448,3 +448,10 @@ input.narrow { width: 70px; }
 .quota-meter span { display: block; height: 100%; background: var(--accent); }
 .quota-meter.warn span { background: var(--warn); } .quota-meter.bad span { background: var(--bad); }
 @media (max-width: 640px) { .quota-row { grid-template-columns: 1fr auto; } .quota-meter { grid-column: 1 / -1; } }
+.quota-table { width: 100%; border-collapse: collapse; }
+.quota-table th, .quota-table td { text-align: left; padding: 8px 6px; border-top: 1px solid var(--line); vertical-align: middle; }
+.quota-table th { font-size: 13px; color: var(--muted); font-weight: 600; }
+.quota-table td .quota-meter { margin-top: 4px; min-width: 120px; }
+.quota-table input { width: 130px; }
+.quota-table .num { font-variant-numeric: tabular-nums; }
+.quota-table tr.quota-current td:first-child { box-shadow: inset 3px 0 0 var(--accent); }

@@ -1721,8 +1721,6 @@ def policy_put(body: PolicyBody, t: Tenant = Depends(current_tenant), conn=Depen
 
 
 class TenantSettings(BaseModel):
-    token_quota_daily: int | None = Field(None, ge=0, le=1_000_000_000)  # 0 = chặn mọi lượt gọi model
-    write_quota_daily: int | None = Field(None, ge=0, le=100_000)
     auto_promote: bool | None = None
     change_freeze: bool | None = None
     self_approve: bool | None = None
@@ -1733,11 +1731,6 @@ class TenantSettings(BaseModel):
 @app.patch("/api/tenant")
 def tenant_patch(body: TenantSettings, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
     t.require_admin()
-    for column in ("token_quota_daily", "write_quota_daily"):
-        value = getattr(body, column)
-        if value is not None:
-            conn.execute(f"UPDATE tenant SET {column}=? WHERE id=?", (value, t.tenant_id))
-            log.info("tenant %s: %s đặt %s=%s", t.tenant_id, t.principal.username, column, value)
     if body.auto_promote is not None:
         conn.execute("UPDATE tenant SET auto_promote=? WHERE id=?", (int(body.auto_promote), t.tenant_id))
     if body.change_freeze is not None:
@@ -1762,14 +1755,44 @@ def tenant_patch(body: TenantSettings, t: Tenant = Depends(current_tenant), conn
     return policy_get(t, conn)
 
 
+def _quota_resets_at() -> str:
+    """Cùng mốc ngày với agent.tokens_today và gateway.writes_today."""
+    return db.iso(datetime.combine(db.now().date() + timedelta(days=1), datetime.min.time(), tzinfo=db.now().tzinfo))
+
+
+def _quota_row(conn, r) -> dict:
+    week = db.now().date() - timedelta(days=6)
+    return {"tenant_id": r["id"], "name": r["name"], "token_quota_daily": r["token_quota_daily"], "tokens_today": agent_mod.tokens_today(conn, r["id"]),
+            "tokens_7d": conn.execute("SELECT coalesce(sum(tokens),0) t FROM episode WHERE tenant_id=? AND started_at>=?", (r["id"], week.isoformat())).fetchone()["t"],
+            "write_quota_daily": r["write_quota_daily"], "writes_today": gateway.writes_today(conn, r["id"])}
+
+
 @app.get("/api/quota")
 def quota_get(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
-    r = conn.execute("SELECT token_quota_daily, write_quota_daily FROM tenant WHERE id=?", (t.tenant_id,)).fetchone()
-    today = db.now().date()
-    return {"token_quota_daily": r["token_quota_daily"], "tokens_today": agent_mod.tokens_today(conn, t.tenant_id),
-            "write_quota_daily": r["write_quota_daily"], "writes_today": gateway.writes_today(conn, t.tenant_id),
-            "resets_at": db.iso(datetime.combine(today + timedelta(days=1), datetime.min.time(), tzinfo=db.now().tzinfo)),
-            "can_manage": t.is_admin}
+    r = conn.execute("SELECT id, name, token_quota_daily, write_quota_daily FROM tenant WHERE id=?", (t.tenant_id,)).fetchone()
+    return {**_quota_row(conn, r), "resets_at": _quota_resets_at(), "can_manage": t.principal.is_org_admin}
+
+
+@app.get("/api/quotas")
+def quotas_list(_: Principal = Depends(require_org_admin), conn=Depends(get_conn)):
+    rows = conn.execute("SELECT id, name, token_quota_daily, write_quota_daily FROM tenant ORDER BY name").fetchall()
+    return {"items": [_quota_row(conn, r) for r in rows], "resets_at": _quota_resets_at()}
+
+
+class QuotaBody(BaseModel):
+    token_quota_daily: int = Field(ge=0, le=1_000_000_000)  # 0 = chặn mọi lượt gọi model
+    write_quota_daily: int = Field(ge=0, le=100_000)
+
+
+@app.put("/api/quotas/{tenant_id}")
+def quota_put(tenant_id: str, body: QuotaBody, principal: Principal = Depends(require_org_admin), conn=Depends(get_conn)):
+    """Quota do org admin đặt: admin của tenant tự nâng quota của mình thì giới hạn không còn tác dụng."""
+    if not conn.execute("UPDATE tenant SET token_quota_daily=?, write_quota_daily=? WHERE id=?",
+                        (body.token_quota_daily, body.write_quota_daily, tenant_id)).rowcount:
+        raise HTTPException(404, "không tìm thấy tenant")
+    log.info("tenant %s: %s đặt quota token=%s ghi=%s", tenant_id, principal.username, body.token_quota_daily, body.write_quota_daily)
+    r = conn.execute("SELECT id, name, token_quota_daily, write_quota_daily FROM tenant WHERE id=?", (tenant_id,)).fetchone()
+    return _quota_row(conn, r)
 
 
 class Simulate(BaseModel):

@@ -388,7 +388,7 @@ async function incidentDetail(main, id) {
         return h("div", { class: "ix-item" }, h("span", { class: "ix-dot bad", "aria-hidden": "true" }),
           h("div", {}, h("strong", {}, "Điều tra đang dừng vì hết quota"), h("span", { class: "small" }, `${why} Bấm Tiếp tục sau khi có quota lại (admin tăng quota, sang ngày mới) hoặc đã đổi sang provider/model khác.`),
             w.source === "provider" ? h("span", { class: "small" }, w.text)
-              : h("a", { href: "#", class: "small", onclick: (e) => { e.preventDefault(); go("settings", undefined, "quota"); } }, isAdmin() ? "Xem và tăng quota ở Cài đặt → Quota" : "Xem quota ở Cài đặt → Quota")),
+              : h("a", { href: "#", class: "small", onclick: (e) => { e.preventDefault(); go("settings", undefined, "quota"); } }, state.me.is_org_admin ? "Xem và tăng quota ở Cài đặt → Quota" : "Xem quota ở Cài đặt → Quota (org admin đặt quota)")),
           h("div", { class: "ix-acts" }, h("button", { type: "button", class: "small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã tiếp tục điều tra") }, "Tiếp tục")));
       }
       const isError = w.kind === "error";
@@ -1524,30 +1524,45 @@ async function refreshMe() {
   renderShell();
 }
 
+function quotaMeter(used, limit) {
+  const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 100;
+  return h("div", { class: "quota-meter " + (pct >= 100 ? "bad" : pct >= 80 ? "warn" : ""), role: "meter", "aria-valuemin": "0", "aria-valuemax": String(limit), "aria-valuenow": String(used) },
+    h("span", { style: `width:${pct}%` }));
+}
+const fmtNum = (n) => Number(n).toLocaleString("vi-VN");
+
+// Org admin đặt quota cho từng tenant; người khác chỉ xem quota và mức dùng của tenant đang chọn.
 async function quotaView(main) {
-  const q = await api("GET", "/api/quota");
-  const fmt = (n) => Number(n).toLocaleString("vi-VN");
-  const meter = (used, limit) => {
-    const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 100;
-    return h("div", { class: "quota-meter " + (pct >= 100 ? "bad" : pct >= 80 ? "warn" : ""), role: "meter", "aria-valuemin": "0", "aria-valuemax": String(limit), "aria-valuenow": String(used) },
-      h("span", { style: `width:${pct}%` }));
+  if (!state.me.is_org_admin) {
+    const q = await api("GET", "/api/quota");
+    main.append(h("div", { class: "card" },
+      h("p", { class: "small" }, `Quota do org admin đặt. Đếm lại từ đầu lúc ${fmtTime(q.resets_at)}. Sự cố đang "Chờ quota" không tự chạy lại: khi đã có quota, mở sự cố và bấm Tiếp tục.`),
+      h("div", { class: "quota-row" }, h("strong", {}, "Token hôm nay"), h("span", { class: "small" }, `${fmtNum(q.tokens_today)} / ${fmtNum(q.token_quota_daily)}`), quotaMeter(q.tokens_today, q.token_quota_daily)),
+      h("div", { class: "quota-row" }, h("strong", {}, "Lệnh ghi hôm nay"), h("span", { class: "small" }, `${fmtNum(q.writes_today)} / ${fmtNum(q.write_quota_daily)}`), quotaMeter(q.writes_today, q.write_quota_daily)),
+      h("p", { class: "small" }, `7 ngày qua: ${fmtNum(q.tokens_7d)} token.`)));
+    return;
+  }
+  const data = await api("GET", "/api/quotas");
+  const row = (q) => {
+    const tokens = h("input", { type: "number", min: "0", step: "100000", value: q.token_quota_daily, "aria-label": `Quota token/ngày của ${q.name}` });
+    const writes = h("input", { type: "number", min: "0", value: q.write_quota_daily, "aria-label": `Quota lệnh ghi/ngày của ${q.name}` });
+    const save = guard(async () => {
+      await api("PUT", `/api/quotas/${q.tenant_id}`, { token_quota_daily: Number(tokens.value), write_quota_daily: Number(writes.value) });
+      toast(`Đã lưu quota của ${q.name}`); renderShell();
+    });
+    return h("tr", { class: q.tenant_id === state.tenant.id ? "quota-current" : "" },
+      h("td", {}, h("strong", {}, q.name)),
+      h("td", {}, h("div", { class: "small" }, `${fmtNum(q.tokens_today)} / ${fmtNum(q.token_quota_daily)}`), quotaMeter(q.tokens_today, q.token_quota_daily)),
+      h("td", { class: "small num" }, fmtNum(q.tokens_7d)),
+      h("td", {}, h("div", { class: "small" }, `${fmtNum(q.writes_today)} / ${fmtNum(q.write_quota_daily)}`), quotaMeter(q.writes_today, q.write_quota_daily)),
+      h("td", {}, tokens), h("td", {}, writes), h("td", {}, h("button", { type: "button", class: "small-btn", onclick: save }, "Lưu")));
   };
-  const field = (key, label, hint) => {
-    const input = h("input", { type: "number", min: "0", step: key === "token_quota_daily" ? "100000" : "1", value: q[key], disabled: !q.can_manage, "aria-label": label });
-    return { input, el: h("label", { class: "field" }, label, input, h("span", { class: "small" }, hint)) };
-  };
-  const tokens = field("token_quota_daily", "Quota token/ngày", "Tổng token của mọi lượt chat, điều tra sự cố trong tenant. 0 = chặn mọi lượt gọi model.");
-  const writes = field("write_quota_daily", "Quota lệnh ghi/ngày", "Số lệnh ghi chạy thành công; vượt thì mọi lệnh ghi phải hỏi người duyệt.");
-  const save = guard(async () => {
-    await api("PATCH", "/api/tenant", { token_quota_daily: Number(tokens.input.value), write_quota_daily: Number(writes.input.value) });
-    toast("Đã lưu quota"); renderShell();
-  });
-  main.append(h("div", { class: "card" },
-    h("p", { class: "small" }, `Đếm lại từ đầu lúc ${fmtTime(q.resets_at)}. Sự cố đang "Chờ quota" không tự chạy lại: sau khi tăng quota, mở sự cố và bấm Tiếp tục.`),
-    h("div", { class: "quota-row" }, h("strong", {}, "Token hôm nay"), h("span", { class: "small" }, `${fmt(q.tokens_today)} / ${fmt(q.token_quota_daily)}`), meter(q.tokens_today, q.token_quota_daily)),
-    h("div", { class: "quota-row" }, h("strong", {}, "Lệnh ghi hôm nay"), h("span", { class: "small" }, `${fmt(q.writes_today)} / ${fmt(q.write_quota_daily)}`), meter(q.writes_today, q.write_quota_daily)),
-    h("div", { class: "fields" }, tokens.el, writes.el),
-    q.can_manage ? h("div", { class: "row" }, h("button", { onclick: save }, "Lưu")) : h("p", { class: "small muted" }, "Chỉ admin của tenant sửa được quota.")));
+  main.append(h("div", { class: "card scroll" },
+    h("p", { class: "small" }, `Quota theo ngày của từng tenant. Đếm lại từ đầu lúc ${fmtTime(data.resets_at)}. Token: mọi lượt chat và điều tra sự cố của tenant, 0 = chặn mọi lượt gọi model. `
+      + "Lệnh ghi: số lệnh ghi chạy thành công, vượt thì mọi lệnh ghi phải hỏi người duyệt. Sự cố đang \"Chờ quota\" không tự chạy lại: sau khi tăng quota, mở sự cố và bấm Tiếp tục."),
+    h("table", { class: "quota-table" },
+      h("thead", {}, h("tr", {}, ["Tenant", "Token hôm nay", "Token 7 ngày", "Lệnh ghi hôm nay", "Quota token/ngày", "Quota lệnh ghi/ngày", ""].map((t) => h("th", {}, t)))),
+      h("tbody", {}, data.items.map(row)))));
 }
 
 VIEWS.settings = (main) => subTabs(main, [["policy", "Chính sách", policyView], ["quota", "Quota", quotaView], ["alerts", "Cảnh báo", alertSettingsView], ...(state.me.is_org_admin ? [["llm", "LLM", llmSettingsView], ["proxy", "Proxy", proxySettingsView]] : [])]);
