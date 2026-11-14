@@ -478,13 +478,80 @@ def test_approval_updates_incident_at_once_and_timeline_shows_fix(flow, users, i
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["stage"] == "verifying" and inc["actions"][0]["status"] == "ok" and "restarted" in inc["actions"][0]["result"]
     texts = [e["text"] for e in inc["timeline"]]
-    assert "chạy kubectl_write rollout restart deployment/web -n default" in texts
-    assert any(t.startswith("nhận định: web CrashLoop") for t in texts) and not any("duyệt" in t or "bắt đầu điều tra" in t for t in texts)
+    ran = next(e for e in inc["timeline"] if e["kind"] == "ran")
+    assert ran["text"] == "chạy kubectl_write rollout restart deployment/web -n default (admin duyệt) → deployment.apps/web restarted"
+    assert ran["action_id"] == inc["actions"][0]["id"] and ran["actor"] == inc["actions"][0]["decided_by"]
+    proposed = next(e for e in inc["timeline"] if e["kind"] == "proposed")
+    assert proposed["actor"] == "kagent" and proposed["text"].startswith("kagent đề xuất kubectl_write rollout restart") and "→ cần duyệt" in proposed["text"]
+    assert any(t.startswith("nhận định: web CrashLoop") for t in texts) and not any("bắt đầu điều tra" in t for t in texts)
     infra.am_alerts[:] = infra.am_alerts[:1]
     with db.session() as conn:
         conn.execute("UPDATE incident SET verify_due=? WHERE id=?", (db.later(seconds=-1), iid))
         incidents.tick(conn)  # luồng tắt: tick vẫn xác minh, tự poll để có số liệu mới
     assert flow.get(f"/api/incidents/{iid}").json()["stage"] == "handled"
+
+
+def test_write_in_incident_chat_is_logged_and_denial_recorded(flow, users):
+    from test_approval_flow import Scripted
+    iid = _web_incident(users)
+    llm.set_provider(Reporting(0.6, [], verdict=False))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+    cid = flow.get(f"/api/incidents/{iid}").json()["conversation_id"]
+    llm.set_provider(Scripted(lambda call_tool: call_tool("k8s.kubectl_write", {"command": "rollout undo deployment/web -n default"})["status"]))
+    with db.session() as conn:
+        uid = conn.execute("SELECT id FROM app_user WHERE username='alice'").fetchone()["id"]
+        agent.run_task(conn, users["alice"].tenant, uid, "rollback web", conversation_id=cid)
+        row = dict(conn.execute("SELECT * FROM incident_action WHERE incident_id=?", (iid,)).fetchone())
+    assert row["origin"] == "chat" and row["requested_by"] == uid and row["status"] == "pending" and row["approval_id"]
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["actions"] == []  # thẻ Hành động cũ chỉ hiện lệnh do điều tra đề xuất
+    proposed = next(e for e in inc["timeline"] if e["kind"] == "proposed")
+    assert proposed["actor"] == uid and proposed["text"].startswith("alice yêu cầu kubectl_write rollout undo deployment/web -n default → cần duyệt")
+    flow.post(f"/api/approvals/{row['approval_id']}/decide", json={"action": "deny", "reason": "chưa rollback, xem log trước"})
+    denied = next(e for e in flow.get(f"/api/incidents/{iid}").json()["timeline"] if e["kind"] == "denied")
+    assert denied["text"] == "admin từ chối kubectl_write rollout undo deployment/web -n default: chưa rollback, xem log trước"
+    assert denied["action_id"] == row["id"] and denied["actor"] != uid
+
+
+def test_expired_approval_is_logged_and_hands_to_human(flow, users):
+    iid = _web_incident(users)
+    llm.set_provider(Reporting(0.6, [RESTART], verdict=False))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+        conn.execute("UPDATE approval_request SET expires_at=?", (db.later(seconds=-1),))
+        gateway.expire_approvals(conn, tenant(users))
+        incidents.follow_up(conn, tenant(users))
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["stage"] == "needs_human" and inc["actions"][0]["status"] == "expired"
+    expired = next(e for e in inc["timeline"] if e["kind"] == "expired")
+    assert expired["text"] == "hết hạn duyệt, chưa chạy kubectl_write rollout restart deployment/web -n default" and expired["actor"] == "system"
+
+
+def test_migration_copies_json_actions_with_original_times(flow, users):
+    iid = _web_incident(users)
+    llm.set_provider(Reporting(0.6, [RESTART], verdict=False))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+        approval = conn.execute("SELECT approval_id FROM incident_action WHERE incident_id=?", (iid,)).fetchone()["approval_id"]
+        conn.execute("UPDATE approval_request SET status='expired', decided_at='2026-11-13T10:18:07+00:00' WHERE id=?", (approval,))
+        old = [{"tool": "k8s.kubectl_write", "args": {"command": "rollout restart deployment/web -n default"}, "why": "khởi động lại",
+                "at": "2026-11-12T17:00:00+00:00", "status": "ok", "auto": True, "verified": False, "approval_id": None,
+                "result": json.dumps({"stdout": "deployment.apps/web restarted\n"})},
+               {"tool": "k8s.kubectl_write", "args": {"command": "rollout undo deployment/web -n default"}, "why": "rollback",
+                "at": "2026-11-13T09:48:07+00:00", "status": "pending", "auto": False, "approval_id": approval, "reasons": ["tự xử lý đang tắt ở dev"]}]
+        conn.execute("UPDATE incident SET actions=? WHERE id=?", (json.dumps(old), iid))
+        conn.execute("DELETE FROM incident_event WHERE kind IN ('proposed','ran','failed','denied','expired')")
+        conn.execute("DROP TABLE incident_action")
+        db.init_schema(conn)
+        rows = [dict(r) for r in conn.execute("SELECT * FROM incident_action WHERE incident_id=? ORDER BY proposed_at", (iid,))]
+    assert [(r["status"], r["auto"], r["verified"], r["proposed_at"]) for r in rows] == [
+        ("ok", 1, 0, "2026-11-12T17:00:00+00:00"), ("expired", 0, None, "2026-11-13T09:48:07+00:00")]
+    assert rows[0]["result_line"] == "deployment.apps/web restarted"
+    events = [(e["at"], e["kind"], e["text"]) for e in flow.get(f"/api/incidents/{iid}").json()["timeline"] if e.get("action_id")]
+    assert events == [("2026-11-12T17:00:00+00:00", "ran", "chạy kubectl_write rollout restart deployment/web -n default (tự động) → deployment.apps/web restarted"),
+                      ("2026-11-13T09:48:07+00:00", "proposed", "kagent đề xuất kubectl_write rollout undo deployment/web -n default → cần duyệt: tự xử lý đang tắt ở dev"),
+                      ("2026-11-13T10:18:07+00:00", "expired", "hết hạn duyệt, chưa chạy kubectl_write rollout undo deployment/web -n default")]
 
 
 def test_investigation_lives_in_shared_conversation(flow, users):
@@ -528,7 +595,7 @@ def test_conversation_shows_incident_actions_on_investigation_turn(flow, users):
 
     llm.set_provider(Reporting(0.99, [RESTART]))
     with db.session() as conn:
-        conn.execute("UPDATE incident SET actions='[]' WHERE id=?", (iid,))
+        conn.execute("DELETE FROM incident_action WHERE incident_id=?", (iid,))
         incidents.investigate(conn, tenant(users), iid)
     msgs = flow.get(f"/api/conversations/{inc['conversation_id']}").json()["messages"]
     ran = msgs[-1]["incident_actions"][0]

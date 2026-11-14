@@ -5,6 +5,8 @@ import json
 import threading
 from datetime import timedelta
 
+import yaml
+
 from .. import db
 
 SOURCE_TEMPLATES = ("alertmanager", "prometheus")
@@ -40,9 +42,10 @@ def _later(seconds: int) -> str:
     return (db.now() + timedelta(seconds=seconds)).isoformat(timespec="seconds")
 
 
-def _event(conn, tenant_id: str, incident_id: str, kind: str, text: str, data: dict | None = None) -> None:
-    conn.execute("INSERT INTO incident_event(tenant_id,incident_id,at,kind,text,data) VALUES (?,?,?,?,?,?)",
-                 (tenant_id, incident_id, db.iso(), kind, text[:1000], json.dumps(data, ensure_ascii=False) if data else None))
+def _event(conn, tenant_id: str, incident_id: str, kind: str, text: str, data: dict | None = None, actor: str | None = None,
+           action_id: str | None = None, at: str | None = None) -> None:
+    conn.execute("INSERT INTO incident_event(tenant_id,incident_id,at,kind,text,data,actor,action_id) VALUES (?,?,?,?,?,?,?,?)",
+                 (tenant_id, incident_id, at or db.iso(), kind, text[:1000], json.dumps(data, ensure_ascii=False) if data else None, actor, action_id))
 
 
 STAGE_LABEL = {"new": "mới", "investigating": "đang điều tra", "reported": "đã báo cáo, cần người xem", "awaiting_approval": "chờ duyệt",
@@ -60,9 +63,43 @@ def _shown_stage(d: dict) -> str:
 
 def _cmd(step: dict) -> str:
     args = step.get("args") or {}
+    if isinstance(args, str):
+        args = json.loads(args) or {}
     return f"{step['tool'].split('.')[-1]} {args['command']}" if isinstance(args.get("command"), str) else f"{step['tool']} {json.dumps(args, ensure_ascii=False)}"
 
 
 def _is_write(conn, tenant_id: str, tool: str) -> bool:
     r = conn.execute("SELECT action_class FROM tool_registry WHERE tenant_id=? AND tool=?", (tenant_id, tool)).fetchone()
     return bool(r and r["action_class"] != "read")
+
+
+MANIFEST_VERBS = {"apply": "tạo hoặc cập nhật", "create": "tạo", "replace": "thay", "delete": "xóa", "patch": "sửa"}
+
+
+def describe(args) -> str | None:
+    """Câu ngắn cho lệnh kubectl kèm manifest khi không có _why: dòng lệnh chỉ còn "apply -f -", không nói đụng vào đối tượng nào."""
+    if not isinstance(args, dict) or not isinstance(args.get("manifest"), str):
+        return None
+    try:
+        docs = [d for d in yaml.safe_load_all(args["manifest"]) if isinstance(d, dict)]
+    except yaml.YAMLError:
+        return None
+    command = args.get("command") if isinstance(args.get("command"), str) else ""
+    words = command.split()
+    verb = MANIFEST_VERBS.get(next((w for w in words if w in MANIFEST_VERBS), ""), "áp manifest")
+    flag_ns = next((words[i + 1] for i, w in enumerate(words[:-1]) if w in ("-n", "--namespace")), None)
+    names = []
+    for d in docs[:5]:
+        meta = d.get("metadata") if isinstance(d.get("metadata"), dict) else {}
+        ns = meta.get("namespace") or flag_ns
+        names.append(f"{d.get('kind', '?')} {meta.get('name', '?')}" + (f" (namespace {ns})" if ns else ""))
+    if not names:
+        return None
+    return f"{verb} " + ", ".join(names) + (f" và {len(docs) - 5} đối tượng khác" if len(docs) > 5 else "")
+
+
+def _label(row: dict) -> str:
+    """Lệnh cho dòng sự kiện; lệnh kèm manifest thêm tên đối tượng vì dòng lệnh chỉ còn "apply -f -"."""
+    args = json.loads(row["args"]) if isinstance(row.get("args"), str) else row.get("args")
+    what = describe(args)
+    return _cmd(row) + (f" ({what})" if what else "")

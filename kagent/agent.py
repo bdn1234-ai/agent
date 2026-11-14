@@ -331,7 +331,9 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
 
     live.current_stop.set(cancelled)
     roles = gateway.user_roles(conn, tenant_id, user_id)
-    ctx = gateway.CallContext(tenant_id, user_id, env, task, episode_id, intent=[*history["intent"], task], calls=list(history["calls"]), roles=roles)
+    incident = conn.execute("SELECT incident_id FROM conversation WHERE id=?", (conversation_id,)).fetchone() if conversation_id and not read_only else None
+    ctx = gateway.CallContext(tenant_id, user_id, env, task, episode_id, intent=[*history["intent"], task], calls=list(history["calls"]), roles=roles,
+                              incident_id=incident["incident_id"] if incident else None)
 
     def on_text(text: str) -> None:
         partial.append(text)

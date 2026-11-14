@@ -162,22 +162,23 @@ def merge(conn, tenant_id: str, incident_id: str, into: str, user: str, auto_rea
                  (into, "rule" if auto_reason else "manual", f"kagent tự gộp từ sự cố {src['title']}: {auto_reason}" if auto_reason
                   else f"người gộp từ sự cố {src['title']}", incident_id))
     # Lệnh còn chờ duyệt đi theo sự cố đích: sự cố nguồn đã đóng thì không còn ai theo dõi để xác minh.
-    src_actions, moved = [], []
-    for a in json.loads(src["actions"] or "[]"):
-        req = conn.execute("SELECT status FROM approval_request WHERE id=?", (a["approval_id"],)).fetchone() if a.get("approval_id") else None
-        (moved if a["status"] == "pending" and req and req["status"] == "pending" else src_actions).append(a)
+    moved = [r["id"] for r in conn.execute(
+        "SELECT a.id FROM incident_action a JOIN approval_request q ON q.id=a.approval_id WHERE a.incident_id=? AND a.origin='investigation' "
+        "AND a.status='pending' AND q.status='pending'", (incident_id,)).fetchall()]
+    for action_id in moved:
+        conn.execute("UPDATE incident_action SET incident_id=? WHERE id=?", (into, action_id))
+        conn.execute("UPDATE incident_event SET incident_id=? WHERE action_id=?", (into, action_id))
     dst_stage = dst["stage"]
     if moved and dst_stage not in ("investigating", "verifying"):
         dst_stage = "awaiting_approval"
     cfg = settings(conn, tenant_id)
     rerun = bool(src_names - dst_names) and cfg["investigate"] and dst["status"] == "open" and into not in _running \
         and dst_stage not in ("investigating", "awaiting_approval", "verifying")
-    conn.execute("UPDATE incident SET status='closed', closed_by=?, actions=?, verify_due=NULL, updated_at=?, investigate_after=NULL WHERE id=?",
-                 (user, json.dumps(src_actions, ensure_ascii=False), db.iso(), incident_id))
-    conn.execute("UPDATE incident SET last_alert_at=max(last_alert_at, ?), severity=?, actions=?, stage=?, updated_at=?, "
+    conn.execute("UPDATE incident SET status='closed', closed_by=?, verify_due=NULL, updated_at=?, investigate_after=NULL WHERE id=?",
+                 (user, db.iso(), incident_id))
+    conn.execute("UPDATE incident SET last_alert_at=max(last_alert_at, ?), severity=?, stage=?, updated_at=?, "
                  "investigate_after=CASE WHEN ? THEN ? ELSE investigate_after END WHERE id=?",
-                 (src["last_alert_at"], _worse(src["severity"], dst["severity"]), json.dumps(json.loads(dst["actions"] or "[]") + moved, ensure_ascii=False),
-                  dst_stage, db.iso(), int(rerun), _later(cfg["debounce_seconds"]), into))
+                 (src["last_alert_at"], _worse(src["severity"], dst["severity"]), dst_stage, db.iso(), int(rerun), _later(cfg["debounce_seconds"]), into))
     listed = ", ".join(sorted(src_names))
     if auto_reason:
         _event(conn, tenant_id, into, "auto_merge", f"kagent tự gộp [{listed}] ({src['title']}) vào [{dst['title']}]: {auto_reason}",

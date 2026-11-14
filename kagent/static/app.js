@@ -352,10 +352,10 @@ async function incidentDetail(main, id) {
               await api("POST", `/api/approvals/${a.approval_id}/decide`, { action: "deny", reason: reason.value.trim() }); toast("Đã từ chối"); await load();
             }) }, "Từ chối")));
       }) : h("div", { class: "small muted" }, d.episode_id ? "Không có hành động được đề xuất." : "Chưa có."));
-    const TL_CLASS = { alert: "warn", alert_resolved: "ok", fix: "info", verified: "ok", resolved: "ok", investigated: "", closed: "" };
+    const TL_CLASS = { alert: "warn", alert_resolved: "ok", ran: "info", failed: "bad", denied: "warn", expired: "warn", proposed: "", verified: "ok", resolved: "ok", investigated: "", closed: "" };
     const timeline = h("div", { class: "card" }, h("h3", {}, "Dòng thời gian"),
       h("ul", { class: "timeline" }, d.timeline.map((e) => h("li", { class: "tl-" + e.kind }, h("span", { class: "small" }, fmtTime(e.at)), " ",
-        TL_CLASS[e.kind] ? h("span", { class: "badge " + TL_CLASS[e.kind] }, { alert: "cảnh báo", alert_resolved: "hết", fix: "khắc phục", verified: "xác minh", resolved: "đã hết" }[e.kind]) : null, " ", e.text))));
+        TL_CLASS[e.kind] ? h("span", { class: "badge " + TL_CLASS[e.kind] }, { alert: "cảnh báo", alert_resolved: "hết", ran: "khắc phục", failed: "lỗi", denied: "từ chối", expired: "hết hạn", verified: "xác minh", resolved: "đã hết" }[e.kind]) : null, " ", e.text))));
     box.replaceChildren();
     appendKids(box, [head, recap, cause, alerts, actions, timeline]);
     if (d.status === "open" && (busyNow || ["new", "awaiting_approval", "verifying"].includes(d.stage))) refreshLater(8000, token, load);

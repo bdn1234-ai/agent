@@ -234,6 +234,20 @@ CREATE TABLE IF NOT EXISTS incident_event (
   kind TEXT NOT NULL, text TEXT NOT NULL, data TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_incident_event ON incident_event(incident_id, id);
+
+-- Lệnh khắc phục của sự cố: kagent đề xuất sau điều tra (origin=investigation) hoặc người chạy trong hội thoại của sự cố (origin=chat).
+-- Thay cột incident.actions (JSON, còn giữ tới bản sau, không ghi thêm).
+CREATE TABLE IF NOT EXISTS incident_action (
+  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, incident_id TEXT NOT NULL,
+  episode_id TEXT, approval_id TEXT, origin TEXT NOT NULL, requested_by TEXT NOT NULL,
+  tool TEXT NOT NULL, args TEXT, why TEXT, risk_tier TEXT, reasons TEXT NOT NULL DEFAULT '[]', dry_run TEXT,
+  status TEXT NOT NULL, auto INTEGER NOT NULL DEFAULT 0, proposed_at TEXT NOT NULL,
+  decided_by TEXT, decided_at TEXT, deny_reason TEXT, ran_at TEXT,
+  result TEXT, result_line TEXT, verified INTEGER, verified_at TEXT, superseded_by TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_incident_action ON incident_action(incident_id, proposed_at);
+CREATE INDEX IF NOT EXISTS ix_incident_action_approval ON incident_action(approval_id);
+CREATE INDEX IF NOT EXISTS ix_incident_action_pending ON incident_action(tenant_id, status);
 """
 
 
@@ -289,6 +303,7 @@ def tx(conn: sqlite3.Connection):
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
+    fresh_actions = not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='incident_action'").fetchone()
     conn.executescript(SCHEMA)
     if "conversation_id" not in {r["name"] for r in conn.execute("PRAGMA table_info(episode)")}:
         conn.execute("ALTER TABLE episode ADD COLUMN conversation_id TEXT")
@@ -330,6 +345,13 @@ def init_schema(conn: sqlite3.Connection) -> None:
     for column in ("summary", "summary_at", "summary_basis"):
         if column not in incident_cols:
             conn.execute(f"ALTER TABLE incident ADD COLUMN {column} TEXT")
+    event_cols = {r["name"] for r in conn.execute("PRAGMA table_info(incident_event)")}
+    for column in ("actor", "action_id"):  # actor: kagent | system | alert | id người dùng
+        if column not in event_cols:
+            conn.execute(f"ALTER TABLE incident_event ADD COLUMN {column} TEXT")
+    if fresh_actions:
+        from .incidents import actions
+        actions.migrate(conn)
     if "alert_settings" not in {r["name"] for r in conn.execute("PRAGMA table_info(tenant)")}:
         conn.execute("ALTER TABLE tenant ADD COLUMN alert_settings TEXT NOT NULL DEFAULT '{}'")  # luồng tự xử lý cảnh báo (incidents.py)
     registry = {r["name"] for r in conn.execute("PRAGMA table_info(tool_registry)")}

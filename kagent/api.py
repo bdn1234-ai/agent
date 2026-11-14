@@ -1528,7 +1528,7 @@ def incident_list(status: str = "open", t: Tenant = Depends(current_tenant), con
     return {"items": incidents.list_incidents(conn, t.tenant_id, status), "enabled": cfg["enabled"], "source_names": cfg["sources"],
             **incidents.source_status(t.tenant_id),
             "counts": {r["status"]: r["n"] for r in conn.execute("SELECT status, count(*) n FROM incident WHERE tenant_id=? GROUP BY status", (t.tenant_id,))},
-            "auto_today": conn.execute("SELECT count(*) n FROM incident_event WHERE tenant_id=? AND kind='action' AND text LIKE '%: đã tự chạy%' AND at>=?",
+            "auto_today": conn.execute("SELECT count(*) n FROM incident_action WHERE tenant_id=? AND origin='investigation' AND auto=1 AND ran_at>=?",
                                        (t.tenant_id, db.now().date().isoformat())).fetchone()["n"]}
 
 

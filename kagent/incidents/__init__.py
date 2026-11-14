@@ -9,8 +9,8 @@ Lệnh do tài khoản bot "kagent-alerts" của tenant gọi, nên audit, chín
 from __future__ import annotations
 
 from .. import db
-from .actions import _auto_count, _sync_approvals, act, follow_up, on_approval, strip_dry_run
-from .common import (BOT, SEVERITY, SOURCE_TEMPLATES, STAGE_LABEL, STAGES, WAITING_ON_HUMAN, IncidentError, _cmd, _event, _is_write, _later,
+from .actions import act, follow_up, has_pending, migrate, on_approval, record_chat_action, result_line, strip_dry_run
+from .common import (BOT, SEVERITY, SOURCE_TEMPLATES, STAGE_LABEL, STAGES, WAITING_ON_HUMAN, IncidentError, MANIFEST_VERBS, describe, _cmd, _event, _is_write, _later,
                      _lock, _method_label, _running, _shown_stage, _slots, _state, _summarizing, _summary_failed, _waiting, _worse)
 from .config import DEFAULTS, bot_user, check_settings, save_settings, settings
 from .grouping import (EXPORTER_JOBS, EXPORTER_LABELS, _attach, _brief, _feedback, _maybe_resolved, _owner, _rule_match, assign, auto_merge,
@@ -19,7 +19,7 @@ from .ingest import _env_of, _fingerprint, fetch, poll, source_status
 from .investigate import (INVESTIGATE_TASK, _investigate_run, _recover_orphans, _write_tools, ensure_conversation, investigate, queued,
                           reinvestigate, start_investigation)
 from .summary import ACTION_STATUS, MAX_SUMMARIES_PER_DAY, _summary_input, due_summaries, last_activity, start_summary, summarize, summary_view
-from .views import MANIFEST_VERBS, SHOWN_EVENTS, actions_by_episode, describe, get, list_incidents, timeline
+from .views import SHOWN_EVENTS, actions_by_episode, get, list_incidents, timeline, view
 
 
 
@@ -32,7 +32,7 @@ def tick(conn) -> None:
             start_summary(t["id"], incident_id, basis)
         cfg = settings(conn, t["id"])
         if not cfg["enabled"]:
-            if conn.execute("SELECT 1 FROM incident WHERE tenant_id=? AND stage IN ('awaiting_approval','verifying') LIMIT 1", (t["id"],)).fetchone():
+            if has_pending(conn, t["id"]) or conn.execute("SELECT 1 FROM incident WHERE tenant_id=? AND stage='verifying' LIMIT 1", (t["id"],)).fetchone():
                 follow_up(conn, t["id"])  # lệnh đã xin duyệt trước khi tắt luồng vẫn được theo dõi
             continue
         state = _state.get(t["id"]) or {}

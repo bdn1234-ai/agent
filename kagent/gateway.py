@@ -163,6 +163,7 @@ class CallContext:
     roles: set | None = None  # vai trò của người yêu cầu trong tenant; None = tra cứu khi gọi
     reviewed: bool = False  # đang chạy bước của công cụ học được đã được người có quyền xem và bật
     forced: list = field(default_factory=list)  # lý do bên gọi buộc phải hỏi (vd. luồng cảnh báo: độ tin dưới ngưỡng cài đặt)
+    incident_id: str | None = None  # lượt chat trong hội thoại của sự cố: lệnh ghi chạy hoặc chờ duyệt được ghi vào incident_action
 
 
 def user_roles(conn, tenant_id: str, user_id: str) -> set[str]:
@@ -270,6 +271,14 @@ def _has_grant(conn, ctx: CallContext, tool: str, args: dict) -> bool:
 
 def invoke(conn, ctx: CallContext, tool_name: str, args: dict) -> dict:
     """Điểm vào duy nhất để gọi công cụ. Trả về bước trace."""
+    step = _invoke(conn, ctx, tool_name, args)
+    if ctx.incident_id and step.get("action_class") not in (None, "read") and step["status"] in ("ok", "error", "pending"):
+        from . import incidents
+        incidents.record_chat_action(conn, ctx, step)
+    return step
+
+
+def _invoke(conn, ctx: CallContext, tool_name: str, args: dict) -> dict:
     if tool_name.startswith("learned."):
         from . import learned  # công cụ học được: mỗi bước lại gọi invoke() này
         return learned.invoke_by_name(conn, ctx, tool_name, args)

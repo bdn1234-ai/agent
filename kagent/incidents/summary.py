@@ -70,9 +70,10 @@ ACTION_STATUS = {"ok": "đã chạy", "pending": "đang chờ duyệt", "expired
 
 def _summary_input(conn, inc) -> dict:
     from .. import agent
+    from .actions import rows
     from .views import timeline  # views đọc summary_view: nhập muộn để tránh vòng
     alerts = [dict(r) for r in conn.execute("SELECT * FROM alert_event WHERE incident_id=? ORDER BY starts_at", (inc["id"],)).fetchall()]
-    events = timeline(conn, {**dict(inc), "actions": json.loads(inc["actions"] or "[]")}, alerts)
+    events = [{k: e[k] for k in ("at", "kind", "text")} for e in timeline(conn, dict(inc), alerts)]
     bot = bot_user(conn, inc["tenant_id"])
     turns = []
     for ep in conn.execute("SELECT user_id, started_at, input, trace FROM episode WHERE conversation_id=? ORDER BY started_at", (inc["conversation_id"],)).fetchall():
@@ -80,13 +81,14 @@ def _summary_input(conn, inc) -> dict:
         turns.append({"at": ep["started_at"], "by": "kagent điều tra tự động" if ep["user_id"] == bot else "người vận hành",
                       "request": str(json.loads(ep["input"]).get("task") or "")[:400], "answer": agent.clean_answer(texts[-1] if texts else "")[-1500:]})
     actions = []
-    for a in json.loads(inc["actions"] or "[]"):
+    for a in rows(conn, inc["id"]):
         status = a["status"]
-        if a.get("approval_id") and status == "pending":
+        if a["approval_id"] and status == "pending":
             req = conn.execute("SELECT status FROM approval_request WHERE id=?", (a["approval_id"],)).fetchone()
             status = req["status"] if req else status
-        actions.append({"command": _cmd(a), "why": a.get("why"), "status": ACTION_STATUS.get(status, status), "auto": bool(a.get("auto")),
-                        "verified": a.get("verified")})
+        actions.append({"command": _cmd(a), "why": a["why"], "status": ACTION_STATUS.get(status, status),
+                        "by": "kagent đề xuất" if a["origin"] == "investigation" else "người vận hành chạy trong chat", "auto": bool(a["auto"]),
+                        "verified": None if a["verified"] is None else bool(a["verified"])})
     shown = _shown_stage(dict(inc))
     return {"now": db.iso(),
             "incident": {"title": inc["title"], "env": inc["env"], "severity": inc["severity"], "status": inc["status"],
