@@ -7,6 +7,7 @@ import threading
 from datetime import timedelta
 
 from .. import db, live
+from . import tasks
 from .common import STAGE_LABEL, IncidentError, _cmd, _event, _lock, _running, _shown_stage, _summarizing, _summary_failed
 from .config import bot_user, settings
 
@@ -97,6 +98,7 @@ def _summary_input(conn, inc) -> dict:
             "alerts": [{"alertname": a["alertname"], "severity": a["severity"], "status": a["status"], "starts_at": a["starts_at"], "resolved_at": a["resolved_at"],
                         "summary": (a["summary"] or "")[:200]} for a in alerts[:20]],
             "events": events[-40:], "actions": actions, "turns": turns[-8:],
+            "human_tasks": [{"text": t["text"], "done": bool(t["done_at"])} for t in tasks.current(conn, inc["id"])],
             # Bản cũ dài quá giới hạn thì model bám theo và viết dài tiếp: bỏ, để viết lại từ đầu.
             "previous_summary": inc["summary"] if inc["summary"] and len(inc["summary"]) <= 450 else None}
 
@@ -116,7 +118,7 @@ def summarize(conn, tenant_id: str, incident_id: str, basis: str | None = None) 
     data = _summary_input(conn, inc)
     with llm.collect_usage() as usage:
         try:
-            text = llm.get_provider().incident_summary(data)
+            out = llm.get_provider().incident_summary(data)
         except llm.LLMError as exc:
             _summary_failed[incident_id] = basis
             raise IncidentError(f"không viết được tóm tắt: {exc}", 502) from exc
@@ -124,8 +126,10 @@ def summarize(conn, tenant_id: str, incident_id: str, basis: str | None = None) 
             if usage:
                 llm.save_usage(conn, tenant_id, None, usage)
     _summary_failed.pop(incident_id, None)
+    text = out["summary"]
     with db.tx(conn):
         conn.execute("UPDATE incident SET summary=?, summary_at=?, summary_basis=? WHERE id=?", (text, db.iso(), basis, incident_id))
+        tasks.sync_from_summary(conn, tenant_id, incident_id, out.get("human_tasks") or [])
         _event(conn, tenant_id, incident_id, "summarized", text)  # giữ các bản cũ; không tính là hoạt động
     return summary_view(conn, conn.execute("SELECT * FROM incident WHERE id=?", (incident_id,)).fetchone())
 

@@ -248,6 +248,14 @@ CREATE TABLE IF NOT EXISTS incident_action (
 CREATE INDEX IF NOT EXISTS ix_incident_action ON incident_action(incident_id, proposed_at);
 CREATE INDEX IF NOT EXISTS ix_incident_action_approval ON incident_action(approval_id);
 CREATE INDEX IF NOT EXISTS ix_incident_action_pending ON incident_action(tenant_id, status);
+
+-- Việc cần người làm ngoài khả năng của kagent (vd. đẩy lại image lên registry). source: summary (bản tóm tắt nêu) | user.
+-- removed_at: bản tóm tắt sau không còn nêu việc chưa xong; việc đã xong thì giữ.
+CREATE TABLE IF NOT EXISTS incident_task (
+  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, incident_id TEXT NOT NULL, text TEXT NOT NULL, source TEXT NOT NULL,
+  created_at TEXT NOT NULL, created_by TEXT, done_by TEXT, done_at TEXT, removed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_incident_task ON incident_task(incident_id, created_at);
 """
 
 

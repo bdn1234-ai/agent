@@ -1590,6 +1590,29 @@ def incident_action_dismiss(incident_id: str, action_id: str, t: Tenant = Depend
     return {"ok": True}
 
 
+class IncidentTask(BaseModel):
+    text: str = Field(max_length=200)
+
+
+@app.post("/api/incidents/{incident_id}/tasks")
+def incident_task_add(incident_id: str, body: IncidentTask, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    t.require_writer()
+    with db.tx(conn):
+        return _incident_call(lambda: incidents.tasks.add(conn, t.tenant_id, incident_id, body.text, t.user_id))
+
+
+class TaskDone(BaseModel):
+    done: bool = True
+
+
+@app.post("/api/incidents/{incident_id}/tasks/{task_id}/done")
+def incident_task_done(incident_id: str, task_id: str, body: TaskDone, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    t.require_writer()
+    with db.tx(conn):
+        _incident_call(lambda: incidents.tasks.set_done(conn, t.tenant_id, incident_id, task_id, t.user_id, body.done))
+    return {"ok": True}
+
+
 @app.post("/api/incidents/{incident_id}/investigate")
 def incident_investigate(incident_id: str, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
     t.require_writer()

@@ -655,13 +655,13 @@ def test_describe_names_manifest_objects():
 
 
 class Summarizing(Reporting):
-    def __init__(self):
+    def __init__(self, tasks=()):
         super().__init__(0.6, [], verdict=False)
-        self.inputs = []
+        self.inputs, self.tasks = [], list(tasks)
 
     def incident_summary(self, data):
         self.inputs.append(data)
-        return f"tóm tắt lần {len(self.inputs)}"
+        return {"summary": f"tóm tắt lần {len(self.inputs)}", "human_tasks": self.tasks}
 
 
 @pytest.fixture()
@@ -853,3 +853,47 @@ def test_related_and_merge_suggestion_then_repeats_after_merge(flow, users):
     with db.session() as conn:
         incidents.split(conn, tenant(users), iid, next(a["id"] for a in inc["alerts"] if a["alertname"] == "Crash"), "x")
     assert flow.get("/api/incidents").json()["suggestions"] == []  # người đã tách: không gợi ý gộp lại
+
+
+def test_summary_tasks_marked_done_and_incident_state_reaches_chat_context(flow, users):
+    from test_approval_flow import Scripted
+    iid = _web_incident(users)
+    llm.set_provider(Reporting(0.6, [], verdict=False))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+    provider = Summarizing(["Đẩy lại image web lên registry"])
+    llm.set_provider(provider)
+    flow.post(f"/api/incidents/{iid}/summary")
+    task = next(w for w in flow.get(f"/api/incidents/{iid}").json()["waiting"] if w["kind"] == "task")
+    assert task["text"] == "Đẩy lại image web lên registry" and task["source"] == "summary"
+    added = flow.post(f"/api/incidents/{iid}/tasks", json={"text": "Báo đội hạ tầng"}).json()
+    assert flow.post(f"/api/incidents/{iid}/tasks/{task['task_id']}/done", json={}).status_code == 200
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert [w["text"] for w in inc["waiting"] if w["kind"] == "task"] == ["Báo đội hạ tầng"]
+    assert [t["text"] for t in inc["tasks_done"]] == ["Đẩy lại image web lên registry"] and inc["tasks_done"][0]["done_by"] == "admin"
+    assert any(e["kind"] == "task_done" and e["who"] == "admin đánh dấu đã xong" for e in inc["timeline"])
+
+    provider.tasks = ["đẩy lại image web lên  registry", "Kiểm tra DNS nội bộ"]  # việc đã xong không thêm lại
+    flow.post(f"/api/incidents/{iid}/summary")
+    assert provider.inputs[-1]["human_tasks"] == [{"text": "Đẩy lại image web lên registry", "done": True}, {"text": "Báo đội hạ tầng", "done": False}]
+    assert [w["text"] for w in flow.get(f"/api/incidents/{iid}").json()["waiting"] if w["kind"] == "task"] == ["Báo đội hạ tầng", "Kiểm tra DNS nội bộ"]
+    provider.tasks = []
+    flow.post(f"/api/incidents/{iid}/summary")  # tóm tắt không còn nêu: bỏ việc nó nêu, giữ việc người thêm
+    assert [w["task_id"] for w in flow.get(f"/api/incidents/{iid}").json()["waiting"] if w["kind"] == "task"] == [added["id"]]
+
+    seen = {}
+
+    def fn(call_tool):
+        return "ok"
+
+    class Capture(Scripted):
+        def run_agent(self, task, context, tools, call_tool, **kw):
+            seen["system"], seen["turn"] = context, kw.get("turn_context", "")
+            return super().run_agent(task, context, tools, call_tool, **kw)
+    llm.set_provider(Capture(fn))
+    cid = flow.get(f"/api/incidents/{iid}").json()["conversation_id"]
+    with db.session() as conn:
+        uid = conn.execute("SELECT id FROM app_user WHERE username='alice'").fetchone()["id"]
+        agent.run_task(conn, users["alice"].tenant, uid, "giờ làm gì tiếp", conversation_id=cid)
+    assert "<incident" in seen["turn"] and "việc cần người: Báo đội hạ tầng" in seen["turn"] and "đã xong (người đánh dấu): Đẩy lại image" in seen["turn"]
+    assert "Tóm tắt: tóm tắt lần 3" in seen["turn"] and "<incident" not in seen["system"]  # system prompt không đổi theo sự cố

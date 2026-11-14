@@ -133,6 +133,12 @@ def who(e: dict, name) -> str:
         return "hết hạn"
     if kind == "quota":
         return "hết quota"
+    if kind == "task_added":
+        return f"{name(actor)} thêm việc cần người"
+    if kind == "task_done":
+        return f"{name(actor)} đánh dấu đã xong"
+    if kind == "task_reopened":
+        return f"{name(actor)} mở lại việc"
     if kind == "closed":
         return f"{name(actor)} đóng" if actor else "đóng"
     return "kagent" if actor in (None, "kagent", "system") else name(actor)

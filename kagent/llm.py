@@ -231,9 +231,13 @@ Viết 2-4 câu ngắn tiếng Việt, văn xuôi, tổng cộng không quá 400
 Chỉ các ý cơ bản: chuyện gì xảy ra ở đâu, kéo dài bao lâu và đã hết chưa, nguyên nhân (nói rõ nếu mới là nghi vấn),
 hiện đang chờ gì hoặc cần ai làm gì. Chi tiết lệnh và cảnh báo đã có ở dòng sự kiện, không nhắc lại.
 Chỉ nói điều dữ liệu cho thấy; không đoán ảnh hưởng tới khách hàng. Kết luận ở lượt sau thay cho lượt trước.
-Không nêu tên người. Có previous_summary thì giữ cách diễn đạt các ý không đổi, chỉ sửa ý đã khác, nhưng vẫn trong giới hạn độ dài."""
+Không nêu tên người. Có previous_summary thì giữ cách diễn đạt các ý không đổi, chỉ sửa ý đã khác, nhưng vẫn trong giới hạn độ dài.
+human_tasks: các việc cụ thể cần người làm mà kagent không tự làm được (nằm ngoài cluster như registry, DNS, hạ tầng; cần quyết định
+hoặc quyền của người), mỗi việc một câu mệnh lệnh ngắn tiếng Việt, tối đa 5 việc. Không đưa lệnh đang chờ duyệt hay lệnh kagent có thể đề xuất.
+Việc trong human_tasks đầu vào còn cần thì giữ nguyên câu chữ; việc có done=true hoặc không còn cần thì bỏ. Không có việc nào thì để rỗng."""
 SUMMARY_MAX = 600  # prompt xin 400; chừa chỗ khi model viết dài hơn một chút
-SUMMARY_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["summary"], "properties": {"summary": {"type": "string"}}}
+SUMMARY_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["summary", "human_tasks"],
+                  "properties": {"summary": {"type": "string"}, "human_tasks": {"type": "array", "items": {"type": "string"}}}}
 
 
 def check_summary(data: dict) -> str:
@@ -245,6 +249,11 @@ def check_summary(data: dict) -> str:
     cut = text[:SUMMARY_MAX]
     end = cut.rfind(". ")
     return cut[:end + 1] if end > SUMMARY_MAX // 3 else cut.rstrip(" ,;") + "…"  # cắt ở cuối câu, không để dở chữ
+
+
+def check_tasks(data: dict) -> list[str]:
+    tasks = [re.sub(r"\s+", " ", str(t)).strip()[:200] for t in data.get("human_tasks") or [] if isinstance(t, str)]
+    return list(dict.fromkeys(t for t in tasks if t))[:5]
 
 
 def check_report(data: dict, tools: set[str]) -> dict:
@@ -582,10 +591,11 @@ class HeuristicProvider:
         names = sorted({a.get("alertname") or "?" for a in data.get("alerts", [])})
         return {"symptom": ", ".join(names)[:80], "root_cause": "", "confidence": 0.0, "evidence": [], "actions": []}
 
-    def incident_summary(self, data: dict) -> str:
+    def incident_summary(self, data: dict) -> dict:
         inc = data["incident"]
         cause = f" Nguyên nhân: {inc['root_cause']}" if inc.get("root_cause") else " Chưa rõ nguyên nhân."
-        return check_summary({"summary": f"{inc['title']} ở môi trường {inc['env']}, mở lúc {inc['opened_at']}; trạng thái: {inc['stage']}.{cause}"})
+        return {"summary": check_summary({"summary": f"{inc['title']} ở môi trường {inc['env']}, mở lúc {inc['opened_at']}; trạng thái: {inc['stage']}.{cause}"}),
+                "human_tasks": [t["text"] for t in data.get("human_tasks", []) if not t.get("done")]}
 
 
 AGENT_SYSTEM = ("Bạn là agent vận hành. Dùng công cụ để hoàn thành nhiệm vụ; mọi lệnh đi qua gateway có thể chặn hoặc chờ duyệt. "
@@ -756,9 +766,9 @@ class _StructuredProvider:
         return check_report(out, tools)
 
     @_for("incident_summary")
-    def incident_summary(self, data: dict) -> str:
+    def incident_summary(self, data: dict) -> dict:
         out, _ = self._json("strong", "low", SUMMARY_SYSTEM, json.dumps(data, ensure_ascii=False), SUMMARY_SCHEMA, 800)
-        return check_summary(out)
+        return {"summary": check_summary(out), "human_tasks": check_tasks(out)}
 
     @_for("judge")
     def judge(self, episode: dict) -> dict:

@@ -86,7 +86,7 @@ def _tool_notes(conn, tenant_id: str, tool_names: list[str], skip: set[str]) -> 
 
 
 def assemble_context(conn, tenant_id: str, task: str, task_type: str, *, project=None, user_id=None, entities=None,
-                     files: dict[str, str] | None = None, tool_names: list[str] | None = None) -> dict:
+                     files: dict[str, str] | None = None, tool_names: list[str] | None = None, incident_id: str | None = None) -> dict:
     """Ngân sách cố định: core, sở thích cá nhân, playbook, KU, ghi chú công cụ; Skill chỉ nạp metadata."""
     files = compiler.read_published(tenant_id) if files is None else files
     core = _clip(files.get("core/rules.md", ""), settings.budget_core)
@@ -121,6 +121,11 @@ def assemble_context(conn, tenant_id: str, task: str, task_type: str, *, project
         turn.append("<knowledge section=\"units\">\n" + "\n".join(line for _, line in chosen) + "\n</knowledge>")
     if notes:
         turn.append("<knowledge section=\"tools\">\n" + "\n".join(notes) + "\n</knowledge>")
+    if incident_id:
+        from . import incidents
+        block = incidents.context_block(conn, tenant_id, incident_id)
+        if block:
+            turn.append(block)
     stable_text, turn_text = "\n\n".join(stable), "\n\n".join(turn)
     text = "\n\n".join(stable + turn)
     ids = set(_ku_ids_in(conn, tenant_id, core + playbook)) | chosen_ids | set(personal_ids) | set(note_ids)
@@ -331,9 +336,10 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
 
     live.current_stop.set(cancelled)
     roles = gateway.user_roles(conn, tenant_id, user_id)
-    incident = conn.execute("SELECT incident_id FROM conversation WHERE id=?", (conversation_id,)).fetchone() if conversation_id and not read_only else None
+    conv = conn.execute("SELECT incident_id FROM conversation WHERE id=?", (conversation_id,)).fetchone() if conversation_id else None
+    incident_id = conv["incident_id"] if conv else None
     ctx = gateway.CallContext(tenant_id, user_id, env, task, episode_id, intent=[*history["intent"], task], calls=list(history["calls"]), roles=roles,
-                              incident_id=incident["incident_id"] if incident else None)
+                              incident_id=None if read_only else incident_id)
 
     def on_text(text: str) -> None:
         partial.append(text)
@@ -475,7 +481,7 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
         allowed.update(t["tool"] for t in tool_list)
         query = f"{history['last_task']} {task}".strip()
         assembled = assemble_context(conn, tenant_id, query, task_type, project=project, user_id=user_id, entities=entities,
-                                     tool_names=[t["tool"] for t in tool_list])
+                                     tool_names=[t["tool"] for t in tool_list], incident_id=incident_id)
         ku_used = assembled["ku_used"]
         trace.append({"type": "context", "ku_used": ku_used, "tokens_est": assembled["tokens_est"],
                       "has_core": assembled["has_core"], "has_playbook": assembled["has_playbook"]})

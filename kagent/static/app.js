@@ -315,7 +315,7 @@ function span(ms) {
 }
 const STATE_TONE = { needs_human: "bad", awaiting_approval: "warn", waiting_quota: "warn", investigating: "info", queued: "info", verifying: "info", handled: "ok", cleared: "ok", closed: "" };
 const EV_MARK = { alert: "alert", alert_resolved: "clear", resolved: "clear", reopened: "alert", investigated: "agent", no_action: "agent", proposed: "agent",
-  ran: "human", verified: "clear", closed: "human", quota: "alert", failed: "fail", denied: "fail", expired: "fail", error: "fail", stopped: "fail" };
+  ran: "human", verified: "clear", closed: "human", quota: "alert", task_added: "human", task_done: "clear", task_reopened: "human", failed: "fail", denied: "fail", expired: "fail", error: "fail", stopped: "fail" };
 const EV_FILTERS = [["all", "Tất cả"], ["action", "Hành động"], ["agent", "Điều tra"], ["alert", "Cảnh báo"]];
 
 async function incidentDetail(main, id) {
@@ -338,15 +338,21 @@ async function incidentDetail(main, id) {
     const others = open.items.filter((i) => i.id !== d.id);
     const into = h("select", { "aria-label": "Gộp vào sự cố" }, h("option", { value: "" }, "Chọn sự cố…"), others.map((i) => h("option", { value: i.id }, `${i.title} (${dm(i.created_at)})`)));
     const closeNote = h("input", { placeholder: "Ghi chú khi đóng (tuỳ chọn)", "aria-label": "Ghi chú khi đóng" });
+    const taskText = h("input", { placeholder: "Vd. đẩy lại image lên registry", maxlength: "200", "aria-label": "Việc cần người" });
     const pop = h("div", { class: "ix-pop", id: "ix-pop", hidden: !menuOpen },
       others.length > 0 && [h("label", { class: "small" }, "Gộp vào sự cố"), into, h("button", { type: "button", class: "ghost small-btn", onclick: guard(async () => {
         if (!into.value) { toast("Chọn sự cố để gộp vào", true); return; }
         await api("POST", `/api/incidents/${id}/merge`, { into: into.value }); toast("Đã gộp"); menuOpen = false; go("incidents", undefined, into.value);
       }) }, "Gộp")],
+      h("label", { class: "small" }, "Thêm việc cần người"), taskText,
+      h("button", { type: "button", class: "ghost small-btn", onclick: act(async () => {
+        if (!taskText.value.trim()) throw new Error("Nhập việc cần làm");
+        await api("POST", `/api/incidents/${id}/tasks`, { text: taskText.value.trim() }); menuOpen = false;
+      }, "Đã thêm việc") }, "Thêm việc"),
       h("label", { class: "small" }, "Đóng sự cố"), closeNote,
       h("button", { type: "button", class: "danger small-btn", onclick: act(async () => { await api("POST", `/api/incidents/${id}/close`, { note: closeNote.value }); menuOpen = false; }, "Đã đóng sự cố") }, "Đóng sự cố"));
     const more = h("button", { type: "button", class: "ghost small-btn", "aria-expanded": String(menuOpen), "aria-controls": "ix-pop",
-      onclick: () => { menuOpen = !menuOpen; pop.hidden = !menuOpen; more.setAttribute("aria-expanded", String(menuOpen)); } }, "Gộp, đóng…");
+      onclick: () => { menuOpen = !menuOpen; pop.hidden = !menuOpen; more.setAttribute("aria-expanded", String(menuOpen)); } }, "Gộp, đóng, thêm việc…");
     const where = d.grouped_by.map((g) => g.replace("=", " ")).join(", ");
     const head = h("section", { class: "card ix-head " + tone, "aria-label": "Sự cố" },
       h("div", {}, h("button", { type: "button", class: "ghost small-btn", onclick: () => go("incidents") }, "← Danh sách")),
@@ -401,6 +407,11 @@ async function incidentDetail(main, id) {
               : h("a", { href: "#", class: "small", onclick: (e) => { e.preventDefault(); go("settings", undefined, "quota"); } }, state.me.is_org_admin ? "Xem và tăng quota ở Cài đặt → Quota" : "Xem quota ở Cài đặt → Quota (org admin đặt quota)")),
           h("div", { class: "ix-acts" }, h("button", { type: "button", class: "small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã tiếp tục điều tra") }, "Tiếp tục")));
       }
+      if (w.kind === "task") {
+        return h("div", { class: "ix-item" }, h("span", { class: "ix-dot info", "aria-hidden": "true" }),
+          h("div", {}, h("strong", {}, w.text), h("span", { class: "small" }, w.source === "summary" ? "Việc cần người, kagent nêu trong bản tóm tắt" : `Việc cần người, thêm lúc ${hmd(w.created_at)}`)),
+          h("div", { class: "ix-acts" }, h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/tasks/${w.task_id}/done`, { done: true }), "Đã đánh dấu xong") }, "Đánh dấu đã xong")));
+      }
       const isError = w.kind === "error";
       return h("div", { class: "ix-item" }, h("span", { class: "ix-dot " + (isError ? "bad" : "info"), "aria-hidden": "true" }),
         h("div", {}, h("strong", {}, isError ? "Điều tra lỗi" : "Cần người xem"), h("span", { class: "small" }, w.text)),
@@ -408,9 +419,12 @@ async function incidentDetail(main, id) {
           ? h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã bắt đầu điều tra lại") }, "Điều tra lại")
           : d.conversation_id && h("button", { type: "button", class: "ghost small-btn", onclick: () => go("chat", d.conversation_id) }, "Hỏi tiếp trong hội thoại")));
     };
-    const wait = d.waiting.length > 0 && h("section", { class: "card ix-wait", "aria-labelledby": "ix-wait-h" },
-      h("div", { class: "ix-sec" }, h("h2", { id: "ix-wait-h" }, "Đang chờ"), h("span", { class: "small" }, `${d.waiting.length} việc`)),
-      d.waiting.map(waitItem));
+    const doneTasks = d.tasks_done.length > 0 && h("details", { class: "ix-done" }, h("summary", {}, `${d.tasks_done.length} việc cần người đã xong`),
+      h("ul", { class: "small" }, d.tasks_done.map((t) => h("li", {}, `${t.text} · ${t.done_by || "?"} đánh dấu lúc ${hmd(t.done_at)} `,
+        h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/tasks/${t.task_id}/done`, { done: false }), "Đã mở lại việc") }, "Mở lại")))));
+    const wait = (d.waiting.length > 0 || doneTasks) && h("section", { class: "card ix-wait", "aria-labelledby": "ix-wait-h" },
+      h("div", { class: "ix-sec" }, h("h2", { id: "ix-wait-h" }, "Đang chờ"), h("span", { class: "small" }, d.waiting.length ? `${d.waiting.length} việc` : "không còn việc nào")),
+      d.waiting.map(waitItem), doneTasks);
 
     // Dòng sự kiện: nhóm theo ngày, lọc theo loại.
     const tl = h("ol", { class: "ix-tl" });
