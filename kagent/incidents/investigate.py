@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from datetime import datetime, time, timedelta
 
 from .. import db, live
 from .actions import act
@@ -103,11 +102,7 @@ def _investigate_run(conn, tenant_id: str, incident_id: str, inc, user: str, tas
         ep = agent.run_task(conn, tenant_id, user, task, env=inc["env"], agent_id="alert-agent", read_only=True, conversation_id=conversation_id,
                             episode_id=run.id, on_event=run.emit, cancelled=run.stop)
     except agent.QuotaExceeded:
-        # Không phải lỗi cần người bấm lại: quota mở lại khi sang ngày, tick điều tra tiếp nếu sự cố còn mở.
-        retry_at = next_quota_day()
-        with db.tx(conn):
-            conn.execute("UPDATE incident SET stage='waiting_quota', investigate_after=?, updated_at=? WHERE id=?", (retry_at, db.iso(), incident_id))
-            _event(conn, tenant_id, incident_id, "quota", "tenant đã hết quota token trong ngày; chưa điều tra", {"retry_at": retry_at}, actor="system")
+        _wait_quota(conn, tenant_id, incident_id, "tenant đã hết quota token trong ngày; chưa điều tra", "tenant")
         return {}
     steps = [s for s in ep["trace"] if s["type"] == "tool_call"]
     if run.stop.is_set():
@@ -118,6 +113,11 @@ def _investigate_run(conn, tenant_id: str, incident_id: str, inc, user: str, tas
                    {"by": run.stop.by, "episode_id": ep["id"]})
         return {}
     failed = next((s["message"] for s in ep["trace"] if s["type"] == "error"), None)
+    if failed and "giới hạn tốc độ" in failed:  # provider trả 429: hết quota hoặc bị giới hạn, thử lại ngay cũng lỗi
+        with db.tx(conn):
+            conn.execute("UPDATE incident SET episode_id=? WHERE id=?", (ep["id"], incident_id))
+        _wait_quota(conn, tenant_id, incident_id, f"model báo hết quota hoặc giới hạn tốc độ: {failed}", "provider")
+        return {}
     if failed:
         with db.tx(conn):
             conn.execute("UPDATE incident SET stage='error', episode_id=?, updated_at=? WHERE id=?", (ep["id"], db.iso(), incident_id))
@@ -144,10 +144,11 @@ def _investigate_run(conn, tenant_id: str, incident_id: str, inc, user: str, tas
     return act(conn, tenant_id, incident_id, report, user, ep["id"], alerts, steps)
 
 
-def next_quota_day() -> str:
-    """Đầu ngày kế tiếp theo cùng mốc ngày với agent.tokens_today."""
-    now = db.now()
-    return datetime.combine(now.date() + timedelta(days=1), time(0), tzinfo=now.tzinfo).isoformat(timespec="seconds")
+def _wait_quota(conn, tenant_id: str, incident_id: str, text: str, source: str) -> None:
+    """Dừng tới khi người bấm Tiếp tục (có quota lại hoặc đã đổi provider); không tự hẹn giờ chạy lại."""
+    with db.tx(conn):
+        conn.execute("UPDATE incident SET stage='waiting_quota', investigate_after=NULL, updated_at=? WHERE id=?", (db.iso(), incident_id))
+        _event(conn, tenant_id, incident_id, "quota", text, {"source": source}, actor="system")
 
 
 def _recover_orphans(conn) -> None:

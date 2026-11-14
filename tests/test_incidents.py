@@ -791,25 +791,37 @@ def test_model_error_during_investigation_marks_error_without_report(flow, users
     assert "mất kết nối" in msg["error"]
 
 
-def test_quota_exhausted_waits_and_reinvestigates_next_day(flow, users, clock, monkeypatch):
+def test_quota_exhausted_stops_until_user_continues(flow, users, clock, monkeypatch):
     iid = _web_incident(users)
     with db.session() as conn:
         conn.execute("UPDATE tenant SET token_quota_daily=0 WHERE id=?", (tenant(users),))
         incidents.investigate(conn, tenant(users), iid)
     inc = flow.get(f"/api/incidents/{iid}").json()
-    assert inc["stage"] == "waiting_quota" and inc["state"]["label"] == "Chờ quota" and inc["waiting"][0]["kind"] == "quota"
-    assert inc["investigate_after"] > db.iso() and inc["investigate_after"].endswith("T00:00:00+00:00")
+    assert inc["stage"] == "waiting_quota" and inc["state"]["label"] == "Chờ quota" and inc["investigate_after"] is None
+    assert inc["waiting"][0]["kind"] == "quota" and inc["waiting"][0]["source"] == "tenant"
     assert any(e["kind"] == "quota" and e["who"] == "hết quota" for e in inc["timeline"])
-    listed = flow.get("/api/incidents?status=attention").json()
-    item = next(i for i in listed["items"] if i["id"] == iid)
-    assert item["state"]["key"] == "waiting_quota" and item["line"].startswith("Chưa điều tra") and listed["counts"]["attention"] >= 1
+    item = next(i for i in flow.get("/api/incidents?status=attention").json()["items"] if i["id"] == iid)
+    assert item["state"]["key"] == "waiting_quota" and "Tiếp tục" in item["line"]
 
     started = []
-    monkeypatch.setattr(incidents, "start_investigation", lambda t, i: started.append(i))
+    monkeypatch.setattr(incidents, "start_investigation", lambda t, i: started.append(i) or True)
     flow.put("/api/alert-settings", json={"enabled": True, "sources": ["am"], "investigate": True})
     with db.session() as conn:
-        incidents.tick(conn)
-        assert iid not in started  # chưa sang ngày
         clock(24 * 60)
         incidents.tick(conn)
-    assert iid in started
+        clock(-24 * 60)  # phiên đăng nhập của test hết hạn nếu để đồng hồ ở ngày sau
+    assert iid not in started  # không tự chạy lại khi sang ngày
+    assert flow.post(f"/api/incidents/{iid}/investigate").status_code == 200 and iid in started
+
+
+def test_provider_rate_limit_waits_for_quota_not_error(flow, users):
+    iid = _web_incident(users)
+
+    class Limited(Reporting):
+        def run_agent(self, task, context, tool_list, call_tool, **kw):
+            raise llm.LLMError("endpoint đang giới hạn tốc độ, thử lại sau")
+    llm.set_provider(Limited(0.6, []))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["stage"] == "waiting_quota" and inc["waiting"][0]["source"] == "provider" and "giới hạn tốc độ" in inc["waiting"][0]["text"]

@@ -110,7 +110,7 @@ Bắt đầu và hết của cảnh báo vẫn lấy từ `alert_event` lúc đ�
 | --- | --- |
 | `cause`, `cause_at`, `cause_episode`, `investigations` (số lượt) | Nguyên nhân theo lượt mới nhất (việc 5); `root_cause` cũ chép sang |
 | `title` giữ nghĩa triệu chứng; báo cáo điều tra thêm trường `symptom` | Tiêu đề ngắn |
-| stage mới `waiting_quota` + `investigate_after` sẵn có | Việc 3 |
+| stage mới `waiting_quota`, không hẹn giờ: người bấm Tiếp tục khi có quota hoặc đã đổi provider | Việc 3 |
 | `repeats` (đếm khi mở lại hoặc gộp) | "Lặp lại N lần", điều kiện postmortem |
 
 ### Bảng `incident_task` (việc cần người)
@@ -143,7 +143,7 @@ Rủi ro: monkeypatch phải trỏ vào module con. Hiện chỉ có một chỗ
 | 0 | Tách module | — | Chỉ dời code, không đổi hành vi | toàn bộ test (`-n auto`) |
 | 1 | Hành động và nhật ký | 1 | `incident_action` + migration; sự kiện có `actor`/`action_id`; gateway ghi lệnh trong chat sự cố; `timeline()` chỉ đọc sự kiện; `on_approval` theo index | test migration trên bản chép `kagent.db`; dòng sự kiện của `b70c928e` có rollout undo lỗi, tạo Service hết hạn, ai duyệt |
 | 2 | API view và trang chi tiết mới | 5 | `get()` trả `header`, `waiting`, `events`, `milestones`, `alert_groups`, `cause`; báo cáo điều tra có `symptom`; nguyên nhân cập nhật mỗi lượt; viết lại `incidentDetail` 2 cột, menu ⋯, lọc sự kiện | Chrome: `b70c928e` đối chiếu mockup; màn hẹp thành 1 cột |
-| 3 | Quota và danh sách | 3 | stage `waiting_quota`, `tick` điều tra lại khi sang ngày nếu còn cảnh báo; danh sách mới, lọc "Cần người xử lý" | test với clock; Chrome danh sách |
+| 3 | Quota và danh sách | 3 | stage `waiting_quota` khi tenant hết quota hoặc provider trả 429, dừng tới khi người bấm Tiếp tục; danh sách mới, lọc "Cần người xử lý" | test với clock; Chrome danh sách |
 | 4 | Lặp lại và liên quan | 2 | `repeats`; `related()` 30 ngày; gợi ý gộp cho sự cố tự gộp bỏ qua | test; Chrome |
 | 5 | Việc cần người và ngữ cảnh agent | 4 | Tóm tắt trả `human_tasks`; `incident_task` + "Đánh dấu đã xong"; tóm tắt mới nhất và việc đang chờ vào `<context>` của lượt chat sự cố (không đổi system prompt) | test `assemble_context`; Chrome |
 | 6 | Cần quyết định trước | 6, 7, 8 | S1–S4 và postmortem; duyệt bản tóm tắt; kênh báo thẻ chờ duyệt | — |

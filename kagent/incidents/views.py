@@ -37,7 +37,7 @@ def list_incidents(conn, tenant_id: str, status: str = "open", limit: int = 100)
         d["stage"] = _shown_stage(d)
         line = first_sentence(r["summary"], 220) or first_sentence(r["cause"] or r["root_cause"], 220)
         if state["key"] == "waiting_quota":
-            line = "Chưa điều tra: tenant hết quota token trong ngày. Sẽ tự điều tra khi quota mở lại."
+            line = "Dừng vì hết quota; bấm Tiếp tục khi đã có quota hoặc đổi provider."
         out.append({**{k: d[k] for k in ("id", "env", "title", "severity", "status", "stage", "confidence", "created_at", "last_alert_at", "resolved_at")},
                     "stage_label": STAGE_LABEL.get(d["stage"], d["stage"]), "state": state, "line": line, "first_alert": counts["first"],
                     "alerts": counts["n"], "firing": counts["f"] or 0,
@@ -199,11 +199,11 @@ def waiting(conn, d: dict) -> list[dict]:
                       "deny_reason": row["deny_reason"], "decided_by": _username(conn, row["decided_by"])})
     busy = d["investigating"] or d["stage"] == "investigating"
     if is_open and not busy and d["stage"] == "waiting_quota":
-        items.append({"kind": "quota", "text": f"Tenant đã hết quota token trong ngày nên chưa điều tra. kagent tự điều tra lại lúc {d['investigate_after']} nếu sự cố còn mở; "
-                      "admin có thể tăng quota rồi bấm Điều tra lại.", "retry_at": d["investigate_after"]})
+        e = conn.execute("SELECT text, data FROM incident_event WHERE incident_id=? AND kind='quota' ORDER BY id DESC LIMIT 1", (d["id"],)).fetchone()
+        items.insert(0, {"kind": "quota", "text": e["text"] if e else "hết quota", "source": json.loads(e["data"] or "{}").get("source") if e else None})
     elif is_open and not busy and d["stage"] == "error":
         e = conn.execute("SELECT text FROM incident_event WHERE incident_id=? AND kind='error' ORDER BY id DESC LIMIT 1", (d["id"],)).fetchone()
-        items.append({"kind": "error", "text": e["text"] if e else "điều tra lỗi"})
+        items.insert(0, {"kind": "error", "text": e["text"] if e else "điều tra lỗi"})
     elif is_open and not busy and not items and d["stage"] in ("reported", "needs_human"):
         e = conn.execute("SELECT text FROM incident_event WHERE incident_id=? AND kind IN ('no_action','verified','stopped') ORDER BY id DESC LIMIT 1",
                          (d["id"],)).fetchone()

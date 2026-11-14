@@ -384,9 +384,11 @@ async function incidentDetail(main, id) {
             h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/actions/${w.action_id}/dismiss`), "Đã bỏ qua") }, "Bỏ qua")));
       }
       if (w.kind === "quota") {
-        return h("div", { class: "ix-item" }, h("span", { class: "ix-dot", "aria-hidden": "true" }),
-          h("div", {}, h("strong", {}, "Chờ quota"), h("span", { class: "small" }, `Tenant đã hết quota token trong ngày nên chưa điều tra. kagent tự điều tra lại lúc ${hmd(w.retry_at)} nếu sự cố còn mở; admin có thể tăng quota rồi bấm Điều tra lại.`)),
-          h("div", { class: "ix-acts" }, h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã bắt đầu điều tra lại") }, "Điều tra lại")));
+        const why = w.source === "provider" ? "Provider LLM báo hết quota hoặc đang giới hạn tốc độ." : "Tenant đã dùng hết quota token trong ngày.";
+        return h("div", { class: "ix-item" }, h("span", { class: "ix-dot bad", "aria-hidden": "true" }),
+          h("div", {}, h("strong", {}, "Điều tra đang dừng vì hết quota"), h("span", { class: "small" }, `${why} Bấm Tiếp tục sau khi có quota lại (admin tăng quota, sang ngày mới) hoặc đã đổi sang provider/model khác.`),
+            w.source === "provider" && h("span", { class: "small" }, w.text)),
+          h("div", { class: "ix-acts" }, h("button", { type: "button", class: "small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã tiếp tục điều tra") }, "Tiếp tục")));
       }
       const isError = w.kind === "error";
       return h("div", { class: "ix-item" }, h("span", { class: "ix-dot " + (isError ? "bad" : "info"), "aria-hidden": "true" }),
