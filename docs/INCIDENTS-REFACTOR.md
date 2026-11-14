@@ -151,6 +151,16 @@ Rủi ro: monkeypatch phải trỏ vào module con. Hiện chỉ có một chỗ
 Giai đoạn 1 là nền cho mọi phần còn lại. Có thể làm giai đoạn 2 trước bằng cách đọc JSON cũ, nhưng khi đó "Đang chờ" thiếu lệnh trong
 chat và thiếu người duyệt, rồi phải viết lại. Giai đoạn 0 có thể gộp vào giai đoạn 1 nếu muốn ít commit hơn.
 
+## Tiến độ
+
+| # | Commit | Khác so với kế hoạch |
+| --- | --- | --- |
+| 0 | `2a6d690` | Thêm `common.py`; module cài đặt tên `config.py` vì `settings` trùng tên hàm `incidents.settings` |
+| 1 | `b3a05e0` | Lệnh tự chạy chỉ ghi một sự kiện `ran`; chat chỉ ghi lệnh ghi đã chạy, lỗi hoặc chờ duyệt |
+| 2 | `b73d801` | Dữ liệu dòng sự kiện vẫn ở khóa `timeline` (có `who`, `cat`); "ai làm" tính lúc đọc, câu sự kiện chỉ còn "lệnh → kết quả"; thêm "Nhờ agent đề xuất lại" (gửi lại đúng lệnh, luôn tạo thẻ duyệt) và "Bỏ qua"; tiêu đề dài kiểu kết luận được đặt lại theo cảnh báo gốc |
+| 3 | `fb8bfc4`, `d9f858b` | Không tự điều tra lại lúc 0h: dừng ở Chờ quota (tenant hết quota hoặc provider trả 429) tới khi người bấm Tiếp tục |
+| — | `6d77dd8`, `470043e` | Ngoài kế hoạch: Cài đặt → Quota, org admin đặt quota token và lệnh ghi cho từng tenant, xem mức dùng hôm nay và 7 ngày |
+
 ## Câu hỏi cho giai đoạn 6
 
 - S1–S4: dev/staging mặc định S4; prod hỏi người bằng `ask_user` (khách hàng có bị ảnh hưởng, phạm vi rộng hay hẹp, có mất dữ liệu),
