@@ -303,6 +303,10 @@ async function incidentDetail(main, id) {
       h("div", { class: "tool-head" }, sevBadge(d.severity), h("h3", {}, d.title), h("span", { class: "spacer" }),
         h("span", { class: "badge " + (STAGE_CLASS[d.stage] || "") }, busyNow ? "đang điều tra" : d.stage_label), badge(d.status === "open" ? "active" : d.status), h("span", { class: "badge" }, d.env)),
       h("div", { class: "small" }, `Mở ${ago(d.created_at)} · cảnh báo mới nhất ${ago(d.last_alert_at)}${d.resolved_at ? ` · hết lúc ${fmtTime(d.resolved_at)}` : ""}`),
+      d.merged_from && d.merged_from.length > 0 && h("div", { class: "small" }, `Gộp từ ${d.merged_from.length} sự cố: `,
+        d.merged_from.map((m, i) => [i ? ", " : "", m.conversation_id
+          ? h("a", { href: "#", title: `${m.auto ? "kagent tự gộp" : "người gộp"} lúc ${fmtTime(m.at)}`, onclick: (e) => { e.preventDefault(); go("chat", m.conversation_id); } }, m.title)
+          : m.title])),
       d.status === "open" && h("div", { class: "row" },
         h("button", { type: "button", class: "ghost small-btn", disabled: busyNow, onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã bắt đầu điều tra lại") }, busyNow ? "Đang điều tra…" : "Điều tra lại"),
         others.length > 0 && into, others.length > 0 && h("button", { type: "button", class: "ghost small-btn", onclick: guard(async () => {
@@ -391,6 +395,9 @@ async function alertSettingsView(main) {
     h("table", { class: "incident-table" }, h("thead", {}, h("tr", {}, h("th", {}, "Môi trường"), h("th", {}, "Tự xử lý"))), h("tbody", {}, envRows)),
     h("label", { class: "field" }, "Luật tự xử lý (mỗi dòng một luật). Auto mode coi các luật này như lời người dùng khi xét hành động đề xuất: chỉ việc nằm trong luật mới được tự chạy", autoRules),
     h("div", { class: "row" }, num("max_auto_actions_per_hour", "Số lần tự xử lý tối đa mỗi sự cố mỗi giờ"), num("verify_minutes", "Xác minh sau (phút)")),
+    h("h3", {}, "Gộp và mở lại"),
+    check(cfg, "auto_merge", "Tự gộp sự cố đang mở khớp nhau theo nhãn hoặc cùng node/workload vào sự cố cũ nhất (không gộp sự cố người đã tách tay hoặc đang có việc dở)"),
+    num("reopen_hours", "Mở lại sự cố đã hết khi cùng nhóm cảnh báo bắn lại trong (giờ, 0 = tắt)"),
     h("h3", {}, "Tóm tắt sự cố"),
     check(cfg.summary, "enabled", "Tự viết tóm tắt cho lãnh đạo khi sự cố yên sau hoạt động mới (hiện ở cuối hội thoại điều tra và trang sự cố)"),
     h("label", { class: "field" }, "Viết lại sau khi yên (phút)", h("input", { type: "number", min: "1", max: "120", value: cfg.summary.idle_minutes, disabled: dis,

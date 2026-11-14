@@ -14,6 +14,7 @@ và chờ duyệt khi cần, cuối cùng có một bản tóm tắt ngắn cho 
 | Hành động khắc phục hiện trong hội thoại điều tra | `2a0444e` |
 | Lệnh hết hạn duyệt hiện rõ: câu dẫn, lý do phải duyệt, giờ hết hạn, nút "Nhờ agent đề xuất lại"; "Ẩn hành động" không ẩn thẻ đã quyết | `b8a0716` |
 | Tóm tắt cho lãnh đạo: tự viết lại khi sự cố yên 5 phút sau hoạt động mới, 2–4 câu khoảng 400 ký tự, ở cuối hội thoại và đầu trang sự cố | `2acd66b` |
+| Gom đúng sự cố kéo dài: sự cố còn cảnh báo đang bắn luôn nhận cảnh báo mới; bắn lại trong 24 giờ sau khi hết thì mở lại sự cố cũ; sự cố đang mở khớp luật nhãn hoặc node/workload thì tự gộp vào sự cố cũ nhất, gộp mang theo lệnh chờ duyệt và link hội thoại cũ | (commit này) |
 
 Đã chốt về bản tóm tắt: chỉ là phần tóm tắt cho lãnh đạo (chuyện gì, bao lâu, nguyên nhân, đang chờ gì). Chi tiết hành động và
 cảnh báo xem ở dòng sự kiện, không lặp lại trong bản tóm tắt, không có 5 Whys hay action item.
@@ -33,12 +34,13 @@ Bản tóm tắt dựa vào dòng sự kiện cho chi tiết, nhưng hiện mỗ
 
 ### 2. Sự cố lặp lại cùng nguyên nhân
 
-Từ 12/11 tới 14/11, ngoài sự cố gốc `b70c928e` (vẫn mở), namespace `svc-document` mở thêm 13 sự cố riêng cho cùng một nhóm lỗi
-(ví dụ `40ae7855`, `a2cc5e77`, `6e7582e4`, `c149d1e8`, `c7130138`). Mỗi sự cố điều tra lại từ đầu; nhiều sự cố dừng vì hết quota.
+Nguyên nhân chính đã sửa: trước đây chỉ sự cố nhận cảnh báo mới trong 10 phút gần nhất mới được xét để gom, nên sự cố kéo dài
+nhiều ngày (`b70c928e`) không nhận cảnh báo bắn lại và `svc-document` mở thêm 13 sự cố riêng. Đã chốt: "cùng nhóm" là khớp luật
+nhãn (`group_labels`) hoặc cùng node/workload; mở lại trong 24 giờ; tự gộp các sự cố đang mở, khớp theo AI thì không tự gộp.
 
-- Tìm sự cố cùng namespace và cùng nhóm cảnh báo trong 30 ngày; hiện "lặp lại N lần" và danh sách sự cố liên quan.
-- Cảnh báo bắn lại khi sự cố cũ còn mở hoặc vừa hết: gợi ý gộp, hoặc đưa vào hội thoại cũ thay vì mở hội thoại mới.
-- Cần chốt: thế nào là "cùng nhóm cảnh báo" (cùng alertname, cùng workload, hay theo nguyên nhân trong bản tóm tắt).
+Còn lại:
+- Đếm số lần lặp (mở lại, gộp) và hiện "lặp lại N lần" trên trang sự cố và danh sách.
+- Sự cố đã hết hoặc đã đóng cùng nhóm trong 30 ngày: hiện ở mục "Sự cố liên quan" (không gộp).
 
 ### 3. Điều tra hỏng vì hết quota không được chạy lại
 

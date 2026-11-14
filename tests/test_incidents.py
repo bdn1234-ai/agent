@@ -97,9 +97,95 @@ def test_poll_dedups_groups_and_resolves(flow, users, infra):
     assert {e["text"] for e in web["timeline"] if e["kind"].startswith("alert")} == {"HighCPU bắt đầu", "Down bắt đầu", "HighCPU hết", "Down hết"}
     assert [i["title"] for i in flow.get("/api/incidents").json()["items"]] == ["HighCPU · payments"]
 
-    # bắn lại sau khi hết (startsAt mới) là lần bắn mới, mở sự cố mới vì sự cố cũ đã đóng
+    # bắn lại sau khi hết (startsAt mới) là lần bắn mới; trong reopen_hours thì mở lại sự cố cũ thay vì mở sự cố mới
     infra.am_alerts.append(am({"alertname": "Down", "severity": "critical", "namespace": "web"}, "f3", starts="2026-11-12T09:00:00Z"))
     assert poll(users)["new"] == 1
+    web = flow.get(f"/api/incidents/{by_title['HighCPU · web']['id']}").json()
+    assert web["status"] == "open" and len(web["alerts"]) == 3 and any(e["kind"] == "reopened" and "Down bắn lại" in e["text"] for e in web["timeline"])
+    assert sorted(i["title"] for i in flow.get("/api/incidents").json()["items"]) == ["HighCPU · payments", "HighCPU · web"]
+
+
+def test_long_running_incident_still_takes_refired_alerts(flow, users, infra, clock):
+    poll(users)
+    clock(60)  # quá window_minutes kể từ cảnh báo cuối nhập vào; sự cố vẫn còn cảnh báo đang bắn
+    infra.am_alerts.append(am({"alertname": "CrashLoop", "severity": "warning", "namespace": "web"}, "f4", starts="2026-11-12T09:30:00Z"))
+    poll(users)
+    titles = [i["title"] for i in flow.get("/api/incidents").json()["items"]]
+    assert sorted(titles) == ["HighCPU · payments", "HighCPU · web"]
+    with db.session() as conn:
+        assert conn.execute("SELECT i.title FROM alert_event a JOIN incident i ON i.id=a.incident_id WHERE a.alertname='CrashLoop'").fetchone()["title"] == "HighCPU · web"
+
+
+def test_refire_after_reopen_window_or_human_close_opens_new_incident(flow, users, infra):
+    poll(users)
+    web = next(i["id"] for i in flow.get("/api/incidents").json()["items"] if i["title"] == "HighCPU · web")
+    infra.am_alerts[:] = infra.am_alerts[:1]
+    poll(users)
+    with db.session() as conn:
+        conn.execute("UPDATE incident SET resolved_at=? WHERE id=?", (db.iso(db.now() - timedelta(hours=25)), web))
+    infra.am_alerts.append(am({"alertname": "Down", "severity": "critical", "namespace": "web"}, "f3", starts="2026-11-13T09:00:00Z"))
+    poll(users)
+    assert flow.get(f"/api/incidents/{web}").json()["status"] == "resolved"
+    new = next(i for i in flow.get("/api/incidents").json()["items"] if i["title"] == "Down · web")
+    flow.post(f"/api/incidents/{new['id']}/close", json={"note": ""})
+    infra.am_alerts[:] = infra.am_alerts[:1]
+    poll(users)
+    infra.am_alerts.append(am({"alertname": "Down", "severity": "critical", "namespace": "web"}, "f3", starts="2026-11-13T10:00:00Z"))
+    poll(users)
+    assert flow.get(f"/api/incidents/{new['id']}").json()["status"] == "closed"  # người đã đóng: không mở lại
+    assert len([i for i in flow.get("/api/incidents").json()["items"] if i["title"] == "Down · web"]) == 1
+
+
+def _separate_incident(users, labels: dict, name="Crash") -> str:
+    """Mở sự cố riêng cho một cảnh báo, bỏ qua bước gom (như sự cố mở trước khi có bản sửa gom)."""
+    t = tenant(users)
+    with db.session() as conn:
+        aid, now = db.new_id(), db.iso()
+        conn.execute("INSERT INTO alert_event(id,tenant_id,source,fingerprint,starts_at,alertname,severity,labels,summary,env,first_seen,last_seen) "
+                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (aid, t, "am", aid, now, name, "warning", json.dumps(labels), "", "dev", now, now))
+        a = conn.execute("SELECT * FROM alert_event WHERE id=?", (aid,)).fetchone()
+        with db.tx(conn):
+            return incidents._attach(conn, t, a, labels, None, incidents.settings(conn, t))
+
+
+def test_auto_merge_rule_matches_into_oldest_but_respects_manual_split(flow, users):
+    poll(users)
+    items = {i["title"]: i["id"] for i in flow.get("/api/incidents").json()["items"]}
+    web = items["HighCPU · web"]
+    dup = _separate_incident(users, {"alertname": "Crash", "namespace": "web"})
+    other = _separate_incident(users, {"alertname": "Crash", "namespace": "billing"}, "Crash2")
+    with db.session() as conn:
+        assert incidents.auto_merge(conn, tenant(users)) == 1
+        feedback = incidents._feedback(conn, tenant(users))
+    assert not any("tự gộp" in f for f in feedback)  # không coi là phản hồi của người cho AI gom
+    dst = flow.get(f"/api/incidents/{web}").json()
+    assert len(dst["alerts"]) == 3 and dst["merged_from"][0]["id"] == dup and dst["merged_from"][0]["auto"]
+    assert flow.get(f"/api/incidents/{dup}").json()["status"] == "closed"
+    assert flow.get(f"/api/incidents/{other}").json()["status"] == "open"
+
+    down = next(a for a in dst["alerts"] if a["alertname"] == "Down")
+    split = flow.post(f"/api/incidents/{web}/split", json={"alert_id": down["id"]}).json()["id"]
+    with db.session() as conn:
+        assert incidents.auto_merge(conn, tenant(users)) == 0  # người đã tách: không gộp lại
+    assert flow.get(f"/api/incidents/{split}").json()["status"] == "open"
+
+
+def test_merge_carries_pending_approval_and_skips_busy_source(flow, users):
+    iid = _web_incident(users)
+    llm.set_provider(Reporting(0.6, [RESTART], verdict=False))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+    pending = flow.get(f"/api/incidents/{iid}").json()
+    assert pending["stage"] == "awaiting_approval"
+    dup = _separate_incident(users, {"alertname": "Crash", "namespace": "web"})
+    with db.session() as conn:
+        conn.execute("UPDATE incident SET created_at='2000-01-01T00:00:00+00:00' WHERE id=?", (dup,))  # dup cũ hơn: web là nguồn
+        assert incidents.auto_merge(conn, tenant(users)) == 0  # nguồn đang chờ duyệt: không tự gộp
+    approval = pending["actions"][0]["approval_id"]
+    assert flow.post(f"/api/incidents/{iid}/merge", json={"into": dup}).status_code == 200
+    dst = flow.get(f"/api/incidents/{dup}").json()
+    assert dst["stage"] == "awaiting_approval" and [a["approval_id"] for a in dst["actions"]] == [approval]
+    assert flow.get(f"/api/incidents/{iid}").json()["actions"] == []
 
 
 def test_source_error_is_reported_not_fatal(flow, users, infra):

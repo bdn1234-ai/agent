@@ -43,6 +43,10 @@ DEFAULTS = {
         "Không xóa tài nguyên, không sửa cấu hình (image, biến môi trường, resource, manifest), không đụng tới đối tượng không có trong cảnh báo.",
     ],
     "max_auto_actions_per_hour": 1, "verify_minutes": 5,
+    # Cảnh báo cùng nhóm bắn lại trong reopen_hours sau khi sự cố hết thì mở lại sự cố đó thay vì mở sự cố mới (0 = tắt).
+    "reopen_hours": 24,
+    # Sự cố đang mở khớp nhau theo luật nhãn hoặc cùng node/workload thì tự gộp vào sự cố cũ nhất; khớp theo AI thì không.
+    "auto_merge": True,
     # Như session recap của Claude Code: viết lại tóm tắt khi đã yên idle_minutes sau hoạt động mới.
     "summary": {"enabled": True, "idle_minutes": 5},
 }
@@ -104,6 +108,8 @@ def check_settings(data) -> dict:
     out["auto_rules"] = rules
     out["max_auto_actions_per_hour"] = num("max_auto_actions_per_hour", 0, 10)
     out["verify_minutes"] = num("verify_minutes", 1, 60)
+    out["reopen_hours"] = num("reopen_hours", 0, 168)
+    out["auto_merge"] = bool(data.get("auto_merge", out["auto_merge"]))
     summary = data.get("summary", {})
     if not isinstance(summary, dict) or set(summary) - {"enabled", "idle_minutes"}:
         raise IncidentError("summary chỉ gồm enabled, idle_minutes")
@@ -318,7 +324,9 @@ def assign(conn, tenant_id: str, alert_id: str, cfg: dict | None = None) -> str:
     a = conn.execute("SELECT * FROM alert_event WHERE id=?", (alert_id,)).fetchone()
     labels = json.loads(a["labels"])
     since = (db.now() - timedelta(minutes=cfg["window_minutes"])).isoformat(timespec="seconds")
-    candidates = conn.execute("SELECT * FROM incident WHERE tenant_id=? AND status='open' AND env=? AND last_alert_at>=? ORDER BY last_alert_at DESC",
+    # Khung window_minutes chỉ áp cho sự cố không còn cảnh báo đang bắn: sự cố kéo dài nhiều ngày vẫn nhận cảnh báo bắn lại.
+    candidates = conn.execute("SELECT * FROM incident WHERE tenant_id=? AND status='open' AND env=? AND (last_alert_at>=? OR EXISTS "
+                              "(SELECT 1 FROM alert_event e WHERE e.incident_id=incident.id AND e.status='firing')) ORDER BY last_alert_at DESC",
                               (tenant_id, a["env"], since)).fetchall()
     found = None
     for inc in candidates:
@@ -337,15 +345,36 @@ def assign(conn, tenant_id: str, alert_id: str, cfg: dict | None = None) -> str:
             verdict = {"incident_id": None, "score": 0.0, "reason": f"lỗi LLM: {exc}"}
         if verdict["incident_id"] and verdict["score"] >= cfg["ai_min_score"]:
             found = (verdict["incident_id"], ("ai", verdict["score"], verdict["reason"] or "LLM đánh giá liên quan"))
+    reopen = False
+    if found is None and cfg["reopen_hours"]:
+        found = _rule_match(conn, labels, cfg, conn.execute(
+            "SELECT * FROM incident WHERE tenant_id=? AND status='resolved' AND env=? AND resolved_at>=? ORDER BY resolved_at DESC",
+            (tenant_id, a["env"], db.iso(db.now() - timedelta(hours=cfg["reopen_hours"])))).fetchall())
+        reopen = found is not None
     with db.tx(conn):
-        return _attach(conn, tenant_id, a, labels, found, cfg)
+        return _attach(conn, tenant_id, a, labels, found, cfg, reopen)
 
 
-def _attach(conn, tenant_id: str, a, labels: dict, found, cfg: dict) -> str:
+def _rule_match(conn, labels: dict, cfg: dict, incidents_) -> tuple | None:
+    """Sự cố đầu tiên có cảnh báo khớp theo luật nhãn hoặc quan hệ k8s; không dùng AI vì mở lại hay gộp là quyết định không có người xem."""
+    for inc in incidents_:
+        for other in conn.execute("SELECT labels FROM alert_event WHERE incident_id=?", (inc["id"],)).fetchall():
+            m = match(labels, json.loads(other["labels"]), cfg["group_labels"])
+            if m:
+                return inc["id"], m
+    return None
+
+
+def _attach(conn, tenant_id: str, a, labels: dict, found, cfg: dict, reopen: bool = False) -> str:
     alert_id = a["id"]
     now = db.iso()
     if found:
         incident_id, (method, score, reason) = found
+        if reopen:
+            conn.execute("UPDATE incident SET status='open', resolved_at=NULL, stage=CASE WHEN stage='investigating' THEN stage ELSE 'new' END, "
+                         "verify_due=NULL WHERE id=?", (incident_id,))
+            _event(conn, tenant_id, incident_id, "reopened", f"mở lại vì {a['alertname']} bắn lại ({_method_label(method)}: {reason})",
+                   {"alert_id": alert_id})
         inc = conn.execute("SELECT * FROM incident WHERE id=?", (incident_id,)).fetchone()
         rerun = inc["stage"] not in ("investigating", "awaiting_approval", "verifying") and cfg["investigate"]
         conn.execute("UPDATE incident SET last_alert_at=?, updated_at=?, severity=?, investigate_after=CASE WHEN ? THEN ? ELSE investigate_after END WHERE id=?",
@@ -627,10 +656,10 @@ def on_approval(conn, tenant_id: str, approval_id: str) -> None:
 def follow_up(conn, tenant_id: str) -> None:
     """Theo dõi duyệt và xác minh: lệnh được duyệt thì chờ xác minh; tới hạn thì xem cảnh báo đã hết chưa."""
     cfg = settings(conn, tenant_id)
-    for inc in conn.execute("SELECT * FROM incident WHERE tenant_id=? AND stage='awaiting_approval'", (tenant_id,)).fetchall():
+    for inc in conn.execute("SELECT * FROM incident WHERE tenant_id=? AND stage='awaiting_approval' AND status!='closed'", (tenant_id,)).fetchall():
         _sync_approvals(conn, tenant_id, inc)
     now = db.iso()
-    due = conn.execute("SELECT * FROM incident WHERE tenant_id=? AND stage='verifying' AND verify_due<=?", (tenant_id, now)).fetchall()
+    due = conn.execute("SELECT * FROM incident WHERE tenant_id=? AND stage='verifying' AND verify_due<=? AND status!='closed'", (tenant_id, now)).fetchall()
     if due and not cfg["enabled"] and cfg["sources"]:
         poll(conn, tenant_id)  # luồng đang tắt thì không ai poll; cần số liệu mới để xác minh
     for inc in due:
@@ -699,6 +728,8 @@ def due_summaries(conn, tenant_id: str) -> list[tuple[str, str]]:
             continue
         if not conn.execute("SELECT 1 FROM episode WHERE conversation_id=? LIMIT 1", (inc["conversation_id"],)).fetchone():
             continue  # chưa điều tra được lượt nào (hết quota, lỗi): chưa có gì để tóm tắt
+        if inc["status"] == "closed" and conn.execute("SELECT 1 FROM incident_event WHERE incident_id=? AND kind='merged'", (inc["id"],)).fetchone():
+            continue  # đã gộp vào sự cố khác: tóm tắt ở sự cố đích
         basis = last_activity(conn, inc)
         if not basis or basis > quiet_since or basis <= (inc["summary_basis"] or "") or _summary_failed.get(inc["id"]) == basis:
             continue
@@ -809,6 +840,8 @@ def tick(conn) -> None:
         state = _state.get(t["id"]) or {}
         if db.now().timestamp() - state.get("last_poll", 0) >= cfg["poll_seconds"] - 1:
             poll(conn, t["id"])
+        if cfg["auto_merge"]:
+            auto_merge(conn, t["id"], cfg)
         follow_up(conn, t["id"])
         if cfg["investigate"]:
             for inc in conn.execute("SELECT id FROM incident WHERE tenant_id=? AND status='open' AND investigate_after IS NOT NULL AND investigate_after<=?",
@@ -848,7 +881,7 @@ def list_incidents(conn, tenant_id: str, status: str = "open", limit: int = 100)
     return out
 
 
-SHOWN_EVENTS = ("investigated", "verified", "resolved", "closed", "no_action", "stopped", "error")
+SHOWN_EVENTS = ("investigated", "verified", "resolved", "reopened", "closed", "no_action", "stopped", "error")
 
 
 def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
@@ -961,6 +994,7 @@ def get(conn, tenant_id: str, incident_id: str) -> dict:
     d["investigating"] = incident_id in _running
     d["queued"] = queued(incident_id)
     d["summary"] = summary_view(conn, r)
+    d["merged_from"] = merged_from(conn, incident_id)
     d["alerts"] = [{**db.row(a, "labels"), "join_label": _method_label(a["join_method"] or "")} for a in conn.execute(
         "SELECT * FROM alert_event WHERE incident_id=? ORDER BY starts_at", (incident_id,)).fetchall()]
     d["timeline"] = timeline(conn, d, d["alerts"])
@@ -978,20 +1012,81 @@ def get(conn, tenant_id: str, incident_id: str) -> dict:
     return d
 
 
-def merge(conn, tenant_id: str, incident_id: str, into: str, user: str) -> None:
+def merge(conn, tenant_id: str, incident_id: str, into: str, user: str, auto_reason: str | None = None) -> None:
+    """Gộp sự cố incident_id vào into. auto_reason có nghĩa kagent tự gộp: ghi kind riêng để không thành phản hồi của người cho AI gom."""
     src, dst = (conn.execute("SELECT * FROM incident WHERE id=? AND tenant_id=?", (i, tenant_id)).fetchone() for i in (incident_id, into))
     if src is None or dst is None or incident_id == into:
         raise IncidentError("không tìm thấy sự cố", 404)
-    names = ", ".join(sorted({r["alertname"] or "?" for r in conn.execute("SELECT alertname FROM alert_event WHERE incident_id=?", (incident_id,))}))
-    conn.execute("UPDATE alert_event SET incident_id=?, join_method='manual', join_score=1.0, join_reason=? WHERE incident_id=?",
-                 (into, f"người gộp từ sự cố {src['title']}", incident_id))
-    conn.execute("UPDATE incident SET status='closed', closed_by=?, updated_at=?, investigate_after=NULL WHERE id=?", (user, db.iso(), incident_id))
-    conn.execute("UPDATE incident SET last_alert_at=max(last_alert_at, ?), severity=?, updated_at=? WHERE id=?",
-                 (src["last_alert_at"], _worse(src["severity"], dst["severity"]), db.iso(), into))
-    text = f"người dùng gộp [{names}] ({src['title']}) vào [{dst['title']}]: các cảnh báo này liên quan"
-    _event(conn, tenant_id, into, "merge", text, {"from": incident_id, "by": user})
-    _event(conn, tenant_id, incident_id, "merged", f"đã gộp vào sự cố {dst['title']}", {"into": into, "by": user})
+    names = lambda iid: {r["alertname"] or "?" for r in conn.execute("SELECT alertname FROM alert_event WHERE incident_id=?", (iid,))}
+    src_names, dst_names = names(incident_id), names(into)
+    conn.execute("UPDATE alert_event SET incident_id=?, join_method=?, join_score=1.0, join_reason=? WHERE incident_id=?",
+                 (into, "rule" if auto_reason else "manual", f"kagent tự gộp từ sự cố {src['title']}: {auto_reason}" if auto_reason
+                  else f"người gộp từ sự cố {src['title']}", incident_id))
+    # Lệnh còn chờ duyệt đi theo sự cố đích: sự cố nguồn đã đóng thì không còn ai theo dõi để xác minh.
+    src_actions, moved = [], []
+    for a in json.loads(src["actions"] or "[]"):
+        req = conn.execute("SELECT status FROM approval_request WHERE id=?", (a["approval_id"],)).fetchone() if a.get("approval_id") else None
+        (moved if a["status"] == "pending" and req and req["status"] == "pending" else src_actions).append(a)
+    dst_stage = dst["stage"]
+    if moved and dst_stage not in ("investigating", "verifying"):
+        dst_stage = "awaiting_approval"
+    cfg = settings(conn, tenant_id)
+    rerun = bool(src_names - dst_names) and cfg["investigate"] and dst["status"] == "open" and into not in _running \
+        and dst_stage not in ("investigating", "awaiting_approval", "verifying")
+    conn.execute("UPDATE incident SET status='closed', closed_by=?, actions=?, verify_due=NULL, updated_at=?, investigate_after=NULL WHERE id=?",
+                 (user, json.dumps(src_actions, ensure_ascii=False), db.iso(), incident_id))
+    conn.execute("UPDATE incident SET last_alert_at=max(last_alert_at, ?), severity=?, actions=?, stage=?, updated_at=?, "
+                 "investigate_after=CASE WHEN ? THEN ? ELSE investigate_after END WHERE id=?",
+                 (src["last_alert_at"], _worse(src["severity"], dst["severity"]), json.dumps(json.loads(dst["actions"] or "[]") + moved, ensure_ascii=False),
+                  dst_stage, db.iso(), int(rerun), _later(cfg["debounce_seconds"]), into))
+    listed = ", ".join(sorted(src_names))
+    if auto_reason:
+        _event(conn, tenant_id, into, "auto_merge", f"kagent tự gộp [{listed}] ({src['title']}) vào [{dst['title']}]: {auto_reason}",
+               {"from": incident_id, "by": user, "moved_actions": len(moved)})
+    else:
+        _event(conn, tenant_id, into, "merge", f"người dùng gộp [{listed}] ({src['title']}) vào [{dst['title']}]: các cảnh báo này liên quan",
+               {"from": incident_id, "by": user, "moved_actions": len(moved)})
+    _event(conn, tenant_id, incident_id, "merged", f"đã gộp vào sự cố {dst['title']}", {"into": into, "by": user, "auto": bool(auto_reason)})
     _maybe_resolved(conn, tenant_id, into)
+
+
+def auto_merge(conn, tenant_id: str, cfg: dict | None = None) -> int:
+    """Gộp các sự cố đang mở khớp nhau theo luật nhãn hoặc quan hệ k8s vào sự cố cũ nhất. Trả về số sự cố đã gộp.
+
+    Bỏ qua sự cố đang có việc dở (điều tra, chờ duyệt, xác minh, lượt chat đang chạy) và sự cố người đã tách hay gộp tay,
+    để không làm ngược quyết định của người.
+    """
+    cfg = cfg or settings(conn, tenant_id)
+    rows = conn.execute("SELECT * FROM incident WHERE tenant_id=? AND status='open' ORDER BY created_at", (tenant_id,)).fetchall()
+    alerts = {r["id"]: conn.execute("SELECT labels, join_method FROM alert_event WHERE incident_id=?", (r["id"],)).fetchall() for r in rows}
+    merged, user = set(), None
+    for j, src in enumerate(rows):
+        if (src["id"] in _running or src["stage"] in ("investigating", "awaiting_approval", "verifying")
+                or (src["conversation_id"] and live.current(src["conversation_id"]))
+                or any(a["join_method"] == "manual" for a in alerts[src["id"]])):
+            continue
+        for dst in rows[:j]:
+            if dst["id"] in merged or dst["env"] != src["env"]:
+                continue
+            found = next((m for a in alerts[src["id"]] for b in alerts[dst["id"]]
+                          if (m := match(json.loads(a["labels"]), json.loads(b["labels"]), cfg["group_labels"]))), None)
+            if found:
+                user = user or bot_user(conn, tenant_id)
+                with db.tx(conn):
+                    merge(conn, tenant_id, src["id"], dst["id"], user, auto_reason=found[2])
+                merged.add(src["id"])
+                alerts[dst["id"]] = alerts[dst["id"]] + alerts.pop(src["id"])
+                break
+    return len(merged)
+
+
+def merged_from(conn, incident_id: str) -> list[dict]:
+    out = []
+    for e in conn.execute("SELECT at, kind, data FROM incident_event WHERE incident_id=? AND kind IN ('merge','auto_merge') ORDER BY id", (incident_id,)).fetchall():
+        src = conn.execute("SELECT id, title, conversation_id, created_at FROM incident WHERE id=?", (json.loads(e["data"] or "{}").get("from"),)).fetchone()
+        if src:
+            out.append({**dict(src), "at": e["at"], "auto": e["kind"] == "auto_merge"})
+    return out
 
 
 def split(conn, tenant_id: str, incident_id: str, alert_id: str, user: str) -> str:
