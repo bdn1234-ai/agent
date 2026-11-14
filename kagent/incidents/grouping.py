@@ -137,7 +137,7 @@ def _attach(conn, tenant_id: str, a, labels: dict, found, cfg: dict, reopen: boo
         incident_id, (method, score, reason) = found
         if reopen:
             conn.execute("UPDATE incident SET status='open', resolved_at=NULL, stage=CASE WHEN stage='investigating' THEN stage ELSE 'new' END, "
-                         "verify_due=NULL WHERE id=?", (incident_id,))
+                         "verify_due=NULL, repeats=repeats+1 WHERE id=?", (incident_id,))
             _event(conn, tenant_id, incident_id, "reopened", f"mở lại vì {a['alertname']} bắn lại ({_method_label(method)}: {reason})",
                    {"alert_id": alert_id})
         inc = conn.execute("SELECT * FROM incident WHERE id=?", (incident_id,)).fetchone()
@@ -191,9 +191,10 @@ def merge(conn, tenant_id: str, incident_id: str, into: str, user: str, auto_rea
         and dst_stage not in ("investigating", "awaiting_approval", "verifying")
     conn.execute("UPDATE incident SET status='closed', closed_by=?, verify_due=NULL, updated_at=?, investigate_after=NULL WHERE id=?",
                  (user, db.iso(), incident_id))
-    conn.execute("UPDATE incident SET last_alert_at=max(last_alert_at, ?), severity=?, stage=?, updated_at=?, "
+    conn.execute("UPDATE incident SET last_alert_at=max(last_alert_at, ?), severity=?, stage=?, updated_at=?, repeats=repeats+1+?, "
                  "investigate_after=CASE WHEN ? THEN ? ELSE investigate_after END WHERE id=?",
-                 (src["last_alert_at"], _worse(src["severity"], dst["severity"]), dst_stage, db.iso(), int(rerun), _later(cfg["debounce_seconds"]), into))
+                 (src["last_alert_at"], _worse(src["severity"], dst["severity"]), dst_stage, db.iso(), src["repeats"], int(rerun),
+                  _later(cfg["debounce_seconds"]), into))
     listed = ", ".join(sorted(src_names))
     if auto_reason:
         _event(conn, tenant_id, into, "auto_merge", f"kagent tự gộp [{listed}] ({src['title']}) vào [{dst['title']}]: {auto_reason}",
@@ -233,6 +234,70 @@ def auto_merge(conn, tenant_id: str, cfg: dict | None = None) -> int:
                 alerts[dst["id"]] = alerts[dst["id"]] + alerts.pop(src["id"])
                 break
     return len(merged)
+
+
+RELATED_DAYS = 30
+
+
+def _labels(conn, incident_id: str) -> list[dict]:
+    return [json.loads(r["labels"]) for r in conn.execute("SELECT labels FROM alert_event WHERE incident_id=?", (incident_id,)).fetchall()]
+
+
+def _first_match(a: list[dict], b: list[dict], keys: list[str]) -> tuple | None:
+    return next((m for x in a for y in b if (m := match(x, y, keys))), None)
+
+
+def _absorbed(conn, incident_id: str) -> bool:
+    return conn.execute("SELECT 1 FROM incident_event WHERE incident_id=? AND kind='merged'", (incident_id,)).fetchone() is not None
+
+
+def related(conn, tenant_id: str, incident_id: str) -> dict:
+    """Sự cố cùng nhóm (luật nhãn hoặc quan hệ k8s) trong RELATED_DAYS ngày: đã hết/đã đóng, và đang mở nên gộp vào đây.
+
+    Bỏ sự cố đã gộp vào sự cố khác: cảnh báo của chúng đã nằm ở sự cố đích.
+    """
+    inc = conn.execute("SELECT * FROM incident WHERE id=? AND tenant_id=?", (incident_id, tenant_id)).fetchone()
+    keys = settings(conn, tenant_id)["group_labels"]
+    mine = _labels(conn, incident_id)
+    since = db.iso(db.now() - timedelta(days=RELATED_DAYS))
+    history, open_ = [], []
+    for r in conn.execute("SELECT id, title, status, created_at, resolved_at, repeats FROM incident WHERE tenant_id=? AND env=? AND id!=? AND created_at>=? "
+                          "ORDER BY created_at DESC", (tenant_id, inc["env"], incident_id, since)).fetchall():
+        if r["status"] == "closed" and _absorbed(conn, r["id"]):
+            continue
+        m = _first_match(mine, _labels(conn, r["id"]), keys)
+        if m:
+            (open_ if r["status"] == "open" else history).append({**dict(r), "reason": m[2]})
+    groups: dict[str, dict] = {}
+    for r in history:  # cảnh báo lặp lại tạo nhiều sự cố cùng tiêu đề: một dòng kèm số lần và khoảng ngày
+        g = groups.setdefault(r["title"], {**r, "count": 0, "first": r["created_at"]})
+        g["count"] += 1
+        g["first"] = min(g["first"], r["created_at"])
+    return {"days": RELATED_DAYS, "open": open_, "history": list(groups.values())[:10], "history_count": len(history)}
+
+
+def suggestions(conn, tenant_id: str) -> list[dict]:
+    """Cặp sự cố đang mở khớp nhau mà tự gộp đã bỏ qua (đang có việc dở, hoặc tự gộp tắt): gợi ý người gộp vào sự cố cũ hơn.
+
+    Bỏ sự cố có cảnh báo người đã tách hay gộp tay: người đã quyết định rồi.
+    """
+    keys = settings(conn, tenant_id)["group_labels"]
+    rows = conn.execute("SELECT * FROM incident WHERE tenant_id=? AND status='open' ORDER BY created_at", (tenant_id,)).fetchall()
+    manual = {r["id"] for r in rows if conn.execute("SELECT 1 FROM alert_event WHERE incident_id=? AND join_method='manual'", (r["id"],)).fetchone()}
+    labels = {r["id"]: _labels(conn, r["id"]) for r in rows}
+    out = []
+    for j, src in enumerate(rows):
+        if src["id"] in manual:
+            continue
+        for dst in rows[:j]:
+            if dst["env"] != src["env"] or dst["id"] in manual:
+                continue
+            m = _first_match(labels[src["id"]], labels[dst["id"]], keys)
+            if m:
+                out.append({"from": {"id": src["id"], "title": src["title"], "created_at": src["created_at"]},
+                            "into": {"id": dst["id"], "title": dst["title"], "created_at": dst["created_at"]}, "reason": m[2]})
+                break
+    return out
 
 
 def merged_from(conn, incident_id: str) -> list[dict]:

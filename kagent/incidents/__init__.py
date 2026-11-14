@@ -13,7 +13,7 @@ from .actions import act, dismiss, follow_up, has_pending, migrate, rebuild_even
 from .common import (BOT, first_sentence, who, SEVERITY, SOURCE_TEMPLATES, STAGE_LABEL, STAGES, WAITING_ON_HUMAN, IncidentError, MANIFEST_VERBS, describe, _cmd, _event, _is_write, _later,
                      _lock, _method_label, _running, _shown_stage, _slots, _state, _summarizing, _summary_failed, _waiting, _worse)
 from .config import DEFAULTS, bot_user, check_settings, save_settings, settings
-from .grouping import (EXPORTER_JOBS, EXPORTER_LABELS, _attach, _brief, _feedback, _maybe_resolved, _owner, _rule_match, assign, auto_merge,
+from .grouping import (RELATED_DAYS, related, suggestions, EXPORTER_JOBS, EXPORTER_LABELS, _attach, _brief, _feedback, _maybe_resolved, _owner, _rule_match, assign, auto_merge,
                        close, match, merge, merged_from, split, target_labels)
 from .ingest import _env_of, _fingerprint, fetch, poll, source_status
 from .investigate import (INVESTIGATE_TASK, _investigate_run, _recover_orphans, _write_tools, ensure_conversation, investigate, queued,

@@ -159,6 +159,7 @@ chat và thiếu người duyệt, rồi phải viết lại. Giai đoạn 0 có
 | 1 | `b3a05e0` | Lệnh tự chạy chỉ ghi một sự kiện `ran`; chat chỉ ghi lệnh ghi đã chạy, lỗi hoặc chờ duyệt |
 | 2 | `b73d801` | Dữ liệu dòng sự kiện vẫn ở khóa `timeline` (có `who`, `cat`); "ai làm" tính lúc đọc, câu sự kiện chỉ còn "lệnh → kết quả"; thêm "Nhờ agent đề xuất lại" (gửi lại đúng lệnh, luôn tạo thẻ duyệt) và "Bỏ qua"; tiêu đề dài kiểu kết luận được đặt lại theo cảnh báo gốc |
 | 3 | `fb8bfc4`, `d9f858b` | Không tự điều tra lại lúc 0h: dừng ở Chờ quota (tenant hết quota hoặc provider trả 429) tới khi người bấm Tiếp tục |
+| 4 | (commit này) | "Lặp lại" đếm lần mở lại và lần nhận sự cố khác gộp vào; sự cố liên quan cùng tiêu đề gom một dòng kèm số lần; gợi ý gộp chỉ theo luật nhãn/quan hệ k8s (không gọi AI), bỏ cặp người đã tách |
 | — | `6d77dd8`, `470043e` | Ngoài kế hoạch: Cài đặt → Quota, org admin đặt quota token và lệnh ghi cho từng tenant, xem mức dùng hôm nay và 7 ngày |
 
 ## Câu hỏi cho giai đoạn 6

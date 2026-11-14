@@ -7,7 +7,7 @@ from .. import db
 from . import actions
 from .common import BOT, STAGE_LABEL, IncidentError, _cmd, first_sentence, _worse, _is_write, _label, _method_label, _running, _shown_stage, describe, who
 from .config import settings
-from .grouping import merged_from
+from .grouping import merged_from, related
 from .investigate import queued
 from .summary import summary_view
 
@@ -38,7 +38,8 @@ def list_incidents(conn, tenant_id: str, status: str = "open", limit: int = 100)
         line = first_sentence(r["summary"], 220) or first_sentence(r["cause"] or r["root_cause"], 220)
         if state["key"] == "waiting_quota":
             line = "Dừng vì hết quota; bấm Tiếp tục khi đã có quota hoặc đổi provider."
-        out.append({**{k: d[k] for k in ("id", "env", "title", "severity", "status", "stage", "confidence", "created_at", "last_alert_at", "resolved_at")},
+        out.append({**{k: d[k] for k in ("id", "env", "title", "severity", "status", "stage", "confidence", "created_at", "last_alert_at", "resolved_at",
+                                          "repeats")},
                     "stage_label": STAGE_LABEL.get(d["stage"], d["stage"]), "state": state, "line": line, "first_alert": counts["first"],
                     "alerts": counts["n"], "firing": counts["f"] or 0,
                     "sources": (counts["s"] or "").split(",") if counts["s"] else [], "investigating": d["investigating"],
@@ -164,6 +165,7 @@ def get(conn, tenant_id: str, incident_id: str) -> dict:
                        "resolved": d["resolved_at"], "last_alert": d["last_alert_at"]}
     d["alert_groups"] = alert_groups(d["alerts"])
     d["grouped_by"] = grouped_by(d["alerts"], settings(conn, tenant_id)["group_labels"])
+    d["related"] = related(conn, tenant_id, incident_id)
     d["cause"] = {"text": d["cause"] or d["root_cause"], "at": d["cause_at"], "round": d["investigations"], "confidence": d["confidence"],
                   "evidence": d["evidence"], "steps": len(d["steps"])} if d["episode_id"] else None
     return d

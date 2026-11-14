@@ -190,7 +190,10 @@ def act(conn, tenant_id: str, incident_id: str, report: dict, user: str, episode
 
 
 def record_chat_action(conn, ctx, step: dict) -> None:
-    """Gateway gọi khi lệnh ghi trong hội thoại của sự cố đã chạy hoặc thành yêu cầu duyệt."""
+    """Gateway gọi khi lệnh ghi trong hội thoại của sự cố đã chạy hoặc thành yêu cầu duyệt. Lệnh chạy thử không đổi gì: bỏ qua."""
+    command = (step.get("args") or {}).get("command") if isinstance(step.get("args"), dict) else None
+    if isinstance(command, str) and "--dry-run" in command and "--dry-run=none" not in command:
+        return
     with db.tx(conn):
         if conn.execute("SELECT 1 FROM incident WHERE id=? AND tenant_id=?", (ctx.incident_id, ctx.tenant_id)).fetchone():
             _insert(conn, ctx.tenant_id, ctx.incident_id, "chat", ctx.user_id, step, ctx.episode_id, step.get("why"))

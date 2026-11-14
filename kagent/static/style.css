@@ -455,3 +455,11 @@ input.narrow { width: 70px; }
 .quota-table input { width: 130px; }
 .quota-table .num { font-variant-numeric: tabular-nums; }
 .quota-table tr.quota-current td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.ix-rel { display: grid; gap: 8px; font-size: 14px; }
+.ix-rel ul { margin: 0; padding-left: 18px; display: grid; gap: 3px; }
+.ix-rel p { margin: 0; }
+.ix-rel-open { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; padding-top: 8px; border-top: 1px solid var(--line); }
+.ix-rel-open > div { min-width: 0; overflow-wrap: anywhere; }
+.ix-rel-open button { flex-shrink: 0; }
+.ix-suggest { border-color: var(--accent); background: color-mix(in srgb, var(--info-bg) 60%, var(--panel)); display: grid; gap: 6px; }
+.ix-suggest p { margin: 0; }

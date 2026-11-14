@@ -345,6 +345,11 @@ def init_schema(conn: sqlite3.Connection) -> None:
     for column in ("summary", "summary_at", "summary_basis"):
         if column not in incident_cols:
             conn.execute(f"ALTER TABLE incident ADD COLUMN {column} TEXT")
+    if "repeats" not in incident_cols:
+        # Số lần sự cố quay lại: mở lại sau khi hết, hoặc nhận sự cố khác gộp vào.
+        conn.execute("ALTER TABLE incident ADD COLUMN repeats INTEGER NOT NULL DEFAULT 0")
+        conn.execute("UPDATE incident SET repeats=(SELECT count(*) FROM incident_event e WHERE e.incident_id=incident.id "
+                     "AND e.kind IN ('reopened','merge','auto_merge'))")
     event_cols = {r["name"] for r in conn.execute("PRAGMA table_info(incident_event)")}
     for column in ("actor", "action_id"):  # actor: kagent | system | alert | id người dùng
         if column not in event_cols:

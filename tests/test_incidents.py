@@ -102,6 +102,7 @@ def test_poll_dedups_groups_and_resolves(flow, users, infra):
     assert poll(users)["new"] == 1
     web = flow.get(f"/api/incidents/{by_title['HighCPU · web']['id']}").json()
     assert web["status"] == "open" and len(web["alerts"]) == 3 and any(e["kind"] == "reopened" and "Down bắn lại" in e["text"] for e in web["timeline"])
+    assert web["repeats"] == 1
     assert sorted(i["title"] for i in flow.get("/api/incidents").json()["items"]) == ["HighCPU · payments", "HighCPU · web"]
 
 
@@ -500,11 +501,14 @@ def test_write_in_incident_chat_is_logged_and_denial_recorded(flow, users):
     with db.session() as conn:
         incidents.investigate(conn, tenant(users), iid)
     cid = flow.get(f"/api/incidents/{iid}").json()["conversation_id"]
-    llm.set_provider(Scripted(lambda call_tool: call_tool("k8s.kubectl_write", {"command": "rollout undo deployment/web -n default"})["status"]))
+    llm.set_provider(Scripted(lambda call_tool: [call_tool("k8s.kubectl_write", {"command": "rollout undo deployment/web -n default --dry-run=server"}),
+                                                 call_tool("k8s.kubectl_write", {"command": "rollout undo deployment/web -n default"})][-1]["status"]))
     with db.session() as conn:
         uid = conn.execute("SELECT id FROM app_user WHERE username='alice'").fetchone()["id"]
         agent.run_task(conn, users["alice"].tenant, uid, "rollback web", conversation_id=cid)
-        row = dict(conn.execute("SELECT * FROM incident_action WHERE incident_id=?", (iid,)).fetchone())
+        rows = conn.execute("SELECT * FROM incident_action WHERE incident_id=?", (iid,)).fetchall()
+        assert len(rows) == 1  # lệnh chạy thử không thành hành động khắc phục
+        row = dict(rows[0])
     assert row["origin"] == "chat" and row["requested_by"] == uid and row["status"] == "pending" and row["approval_id"]
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["actions"] == []  # thẻ Hành động cũ chỉ hiện lệnh do điều tra đề xuất
@@ -825,3 +829,27 @@ def test_provider_rate_limit_waits_for_quota_not_error(flow, users):
         incidents.investigate(conn, tenant(users), iid)
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["stage"] == "waiting_quota" and inc["waiting"][0]["source"] == "provider" and "giới hạn tốc độ" in inc["waiting"][0]["text"]
+
+
+def test_related_and_merge_suggestion_then_repeats_after_merge(flow, users):
+    iid = _web_incident(users)
+    dup = _separate_incident(users, {"alertname": "Crash", "namespace": "web"})
+    other = _separate_incident(users, {"alertname": "Crash", "namespace": "billing"})
+    old = _separate_incident(users, {"alertname": "Down", "namespace": "web"})
+    with db.session() as conn:
+        conn.execute("UPDATE incident SET status='resolved', resolved_at=? WHERE id=?", (db.iso(), old))
+    rel = flow.get(f"/api/incidents/{iid}").json()["related"]
+    assert [r["id"] for r in rel["open"]] == [dup] and "namespace=web" in rel["open"][0]["reason"]
+    assert [(r["id"], r["count"]) for r in rel["history"]] == [(old, 1)] and rel["history_count"] == 1 and rel["days"] == 30
+    assert all(r["id"] != other for r in rel["open"] + rel["history"])
+
+    listed = flow.get("/api/incidents").json()
+    assert [(g["from"]["id"], g["into"]["id"]) for g in listed["suggestions"]] == [(dup, iid)]
+    assert flow.post(f"/api/incidents/{dup}/merge", json={"into": iid}).status_code == 200
+    assert flow.get("/api/incidents").json()["suggestions"] == []
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["repeats"] == 1 and inc["related"]["open"] == []  # sự cố đã gộp vào đây không còn là sự cố liên quan
+
+    with db.session() as conn:
+        incidents.split(conn, tenant(users), iid, next(a["id"] for a in inc["alerts"] if a["alertname"] == "Crash"), "x")
+    assert flow.get("/api/incidents").json()["suggestions"] == []  # người đã tách: không gợi ý gộp lại

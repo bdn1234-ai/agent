@@ -282,12 +282,21 @@ async function incidentList(main) {
         h("span", { class: "ix-stripe " + tone }),
         h("div", { class: "ix-t" }, h("strong", {}, i.title), i.line && h("p", {}, i.line),
           h("span", { class: "small" }, [i.env, i.sources.join(", "), `cảnh báo mới nhất ${ago(i.last_alert_at)}`].filter(Boolean).join(" · "))),
-        h("div", { class: "ix-state" }, h("span", { class: "pill " + tone }, i.investigating ? "Đang điều tra" : i.state.label), sevBadge(i.severity)),
+        h("div", { class: "ix-state" }, h("span", { class: "pill " + tone }, i.investigating ? "Đang điều tra" : i.state.label), sevBadge(i.severity),
+          i.repeats > 0 && h("span", { class: "pill" }, `Lặp lại ${i.repeats} lần`)),
         h("div", { class: "ix-when" }, age, h("br"), `${i.firing}/${i.alerts} đang bắn`));
     };
+    const suggest = data.suggestions.length > 0 && h("section", { class: "card ix-suggest", "aria-label": "Gợi ý gộp" },
+      h("strong", {}, `${data.suggestions.length} sự cố đang mở trùng nhóm với sự cố mở trước đó`),
+      h("p", { class: "small" }, "kagent không tự gộp vì sự cố đang có việc dở (điều tra, chờ duyệt, xác minh) hoặc tự gộp đang tắt. Gộp để xử lý một lần."),
+      data.suggestions.map((g) => h("div", { class: "ix-rel-open" },
+        h("div", {}, h("a", { href: "#", onclick: (e) => { e.preventDefault(); go("incidents", undefined, g.from.id); } }, g.from.title), " → ",
+          h("a", { href: "#", onclick: (e) => { e.preventDefault(); go("incidents", undefined, g.into.id); } }, g.into.title),
+          h("div", { class: "small" }, `${g.reason} · sự cố gốc mở ${hmd(g.into.created_at)}`)),
+        h("button", { type: "button", class: "small-btn", onclick: guard(async () => { await api("POST", `/api/incidents/${g.from.id}/merge`, { into: g.into.id }); toast("Đã gộp"); await load(); }) }, "Gộp vào sự cố gốc"))));
     const empty = { attention: "Không có sự cố nào cần người xử lý.", open: "Không có sự cố đang mở." }[status] || "Không có sự cố.";
     box.replaceChildren();
-    appendKids(box, [tabs, statusLine, data.items.length ? h("section", { class: "card ix-list", "aria-label": "Sự cố" }, data.items.map(row)) : h("div", { class: "card muted" }, empty)]);
+    appendKids(box, [tabs, statusLine, suggest, data.items.length ? h("section", { class: "card ix-list", "aria-label": "Sự cố" }, data.items.map(row)) : h("div", { class: "card muted" }, empty)]);
     refreshLater(15000, token, load);
   }
   await load();
@@ -344,7 +353,8 @@ async function incidentDetail(main, id) {
       h("div", { class: "ix-top" },
         h("div", {}, h("span", { class: "ix-eyebrow" }, ["Sự cố", d.env, where].filter(Boolean).join(" · ")), h("h1", {}, d.title),
           h("div", { class: "row" }, h("span", { class: "pill " + tone }, d.state.label), sevBadge(d.severity), h("span", { class: "pill" }, age),
-            h("span", { class: "pill " + (firing ? "warn" : "ok") }, `${firing}/${d.alerts.length} cảnh báo đang bắn`)),
+            h("span", { class: "pill " + (firing ? "warn" : "ok") }, `${firing}/${d.alerts.length} cảnh báo đang bắn`),
+            d.repeats > 0 && h("span", { class: "pill", title: "Số lần mở lại sau khi hết, hoặc nhận sự cố khác gộp vào" }, `Lặp lại ${d.repeats} lần`)),
           d.merged_from.length > 0 && h("div", { class: "small" }, `Gộp từ ${d.merged_from.length} sự cố: `,
             d.merged_from.map((x, i) => [i ? ", " : "", x.conversation_id
               ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); go("chat", x.conversation_id); } }, x.title) : x.title]))),
@@ -455,9 +465,17 @@ async function incidentDetail(main, id) {
           d.conversation_id && h("a", { href: "#", class: "small", onclick: (e) => { e.preventDefault(); go("chat", d.conversation_id); } }, "Từng lệnh và câu trả lời đầy đủ ở hội thoại điều tra"))]
         : !busyNow && h("p", { class: "small muted" }, "Chưa điều tra."));
 
+    const rel = d.related;
+    const incLink = (r) => h("a", { href: "#", onclick: (e) => { e.preventDefault(); go("incidents", undefined, r.id); } }, r.title);
+    const related = h("section", { class: "card ix-rel", "aria-labelledby": "ix-r-h" }, h("div", { class: "ix-sec" }, h("h3", { id: "ix-r-h" }, "Sự cố liên quan")),
+      rel.open.map((r) => h("div", { class: "ix-rel-open" }, h("div", {}, incLink(r), h("div", { class: "small" }, `đang mở từ ${hmd(r.created_at)} · ${r.reason}`)),
+        d.status === "open" && h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${r.id}/merge`, { into: id }), "Đã gộp vào sự cố này") }, "Gộp vào đây"))),
+      rel.history_count > 0 && h("p", { class: "small" }, `${rel.history_count} sự cố cùng nhóm đã hết hoặc đã đóng trong ${rel.days} ngày:`),
+      rel.history.length > 0 && h("ul", { class: "small" }, rel.history.map((r) => h("li", {}, incLink(r), r.count > 1 ? ` · ${r.count} lần, ${dm(r.first)}–${dm(r.created_at)}` : ` · ${dm(r.created_at)}`))),
+      !rel.open.length && !rel.history_count && h("p", { class: "small muted" }, `Không có sự cố cùng nhóm trong ${rel.days} ngày.`));
     const recap = d.summary && summaryCard(d.summary, id);
     box.replaceChildren();
-    appendKids(box, [head, wait, h("div", { class: "ix-grid" }, h("div", { class: "ix-col" }, recap, events), h("aside", { class: "ix-col", "aria-label": "Thông tin sự cố" }, times, alerts, cause))]);
+    appendKids(box, [head, wait, h("div", { class: "ix-grid" }, h("div", { class: "ix-col" }, recap, events), h("aside", { class: "ix-col", "aria-label": "Thông tin sự cố" }, times, alerts, cause, related))]);
     if (!menuOpen && d.status === "open" && (busyNow || ["new", "awaiting_approval", "verifying"].includes(d.stage))) refreshLater(8000, token, load);
   }
   await load();

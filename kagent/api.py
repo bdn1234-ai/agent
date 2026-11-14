@@ -1529,6 +1529,7 @@ def incident_list(status: str = "open", t: Tenant = Depends(current_tenant), con
     counts = {r["status"]: r["n"] for r in conn.execute("SELECT status, count(*) n FROM incident WHERE tenant_id=? GROUP BY status", (t.tenant_id,))}
     counts["attention"] = len(items) if status == "attention" else len(incidents.list_incidents(conn, t.tenant_id, "attention"))
     return {"items": items, "enabled": cfg["enabled"], "source_names": cfg["sources"], **incidents.source_status(t.tenant_id), "counts": counts,
+            "suggestions": incidents.suggestions(conn, t.tenant_id),
             "auto_today": conn.execute("SELECT count(*) n FROM incident_action WHERE tenant_id=? AND origin='investigation' AND auto=1 AND ran_at>=?",
                                        (t.tenant_id, db.now().date().isoformat())).fetchone()["n"]}
 
