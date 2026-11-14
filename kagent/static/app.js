@@ -254,34 +254,40 @@ function refreshLater(ms, token, fn) { setTimeout(() => { if (incidentTimer === 
 
 VIEWS.incidents = (main) => (state.sub ? incidentDetail(main, state.sub) : incidentList(main));
 
+const LIST_FILTERS = [["attention", "Cần người xử lý"], ["open", "Đang mở"], ["resolved", "Đã hết"], ["closed", "Đã đóng"], ["all", "Tất cả"]];
+
 async function incidentList(main) {
   const token = ++incidentTimer;
-  let status = store.get("incidents:status", "open");
-  const box = h("div");
+  let status = store.get("incidents:filter", "attention");
+  const box = h("div", { class: "ix" });
   main.append(box);
   async function load() {
     const data = await api("GET", `/api/incidents?status=${status}`);
-    const chip = (k, label) => h("button", { type: "button", class: "chip" + (status === k ? " on" : ""), "aria-pressed": status === k ? "true" : "false",
-      onclick: () => { status = k; store.set("incidents:status", k); load(); } }, `${label}${data.counts[k] !== undefined ? ` (${data.counts[k]})` : ""}`);
+    const tabs = h("div", { class: "row ix-tabs", role: "group", "aria-label": "Lọc sự cố" }, LIST_FILTERS.map(([k, label]) =>
+      h("button", { type: "button", class: "chip" + (status === k ? " on" : ""), "aria-pressed": String(status === k),
+        onclick: () => { status = k; store.set("incidents:filter", k); load(); } }, `${label}${data.counts[k] !== undefined ? ` (${data.counts[k]})` : ""}`)),
+      h("span", { class: "spacer" }), h("span", { class: "small" }, `Tự xử lý hôm nay: ${data.auto_today}`));
     const srcInfo = Object.entries(data.sources || {});
     const statusLine = data.enabled
-      ? h("div", { class: "small" }, `Lấy cảnh báo lần cuối: ${data.last_poll ? ago(new Date(data.last_poll * 1000).toISOString()) : "chưa"}`,
+      ? h("div", { class: "small" }, `Lấy cảnh báo lần cuối: ${data.last_poll ? ago(new Date(data.last_poll * 1000).toISOString()) : "chưa"} `,
           ...srcInfo.map(([name, st]) => h("span", { class: "badge " + (st.error ? "bad" : "ok") }, `${name}: ${st.error ? "lỗi" : st.count + " cảnh báo"}`)),
           ...srcInfo.filter(([, st]) => st.error).map(([name, st]) => h("div", { class: "warn-text" }, `${name}: ${st.error}`)))
       : h("div", { class: "card muted" }, "Luồng tự xử lý cảnh báo đang tắt. ", isAdmin() ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); go("settings", undefined, "alerts"); } }, "Bật ở Cài đặt → Cảnh báo") : "Nhờ admin bật ở Cài đặt → Cảnh báo.");
-    const rows = data.items.map((i) => h("div", { class: "card incident-row", role: "button", tabindex: "0", onclick: () => go("incidents", undefined, i.id),
-      onkeydown: (e) => { if (e.key === "Enter") go("incidents", undefined, i.id); } },
-      h("div", { class: "tool-head" }, sevBadge(i.severity), h("strong", {}, i.title), h("span", { class: "spacer" }),
-        h("span", { class: "badge " + (STAGE_CLASS[i.stage] || "") }, i.investigating ? "đang điều tra" : i.stage_label),
-        h("span", { class: "badge" }, i.env)),
-      h("div", { class: "small" }, `${i.firing}/${i.alerts} cảnh báo đang bắn · ${i.sources.join(", ")} · cảnh báo mới nhất ${ago(i.last_alert_at)}`,
-        i.confidence !== null && i.confidence !== undefined ? ` · độ tin ${i.confidence.toFixed(2)}` : ""),
-      i.last_action && h("div", { class: "small" }, `${STEP_STATUS[i.last_action.status] || i.last_action.status}${i.last_action.auto ? " (tự động)" : ""}: `, h("code", {}, actionText(i.last_action)),
-        i.last_action.verified === true ? " · đã xác minh hết cảnh báo" : i.last_action.verified === false ? " · cảnh báo vẫn còn" : "")));
+    const row = (i) => {
+      const tone = STATE_TONE[i.state.key] || "";
+      const started = i.first_alert || i.created_at;
+      const age = i.status === "open" ? `mở ${span(Date.now() - new Date(started))}` : i.resolved_at ? `hết sau ${span(new Date(i.resolved_at) - new Date(started))}` : "đã đóng";
+      const open = () => go("incidents", undefined, i.id);
+      return h("div", { class: "ix-inc", role: "link", tabindex: "0", onclick: open, onkeydown: (e) => { if (e.key === "Enter") open(); } },
+        h("span", { class: "ix-stripe " + tone }),
+        h("div", { class: "ix-t" }, h("strong", {}, i.title), i.line && h("p", {}, i.line),
+          h("span", { class: "small" }, [i.env, i.sources.join(", "), `cảnh báo mới nhất ${ago(i.last_alert_at)}`].filter(Boolean).join(" · "))),
+        h("div", { class: "ix-state" }, h("span", { class: "pill " + tone }, i.investigating ? "Đang điều tra" : i.state.label), sevBadge(i.severity)),
+        h("div", { class: "ix-when" }, age, h("br"), `${i.firing}/${i.alerts} đang bắn`));
+    };
+    const empty = { attention: "Không có sự cố nào cần người xử lý.", open: "Không có sự cố đang mở." }[status] || "Không có sự cố.";
     box.replaceChildren();
-    appendKids(box, [h("div", { class: "row" }, chip("open", "Đang mở"), chip("resolved", "Đã hết"), chip("closed", "Đã đóng"), chip("all", "Tất cả"),
-      h("span", { class: "spacer" }), h("span", { class: "small" }, `Tự xử lý hôm nay: ${data.auto_today}`)), statusLine,
-      rows.length ? rows : h("div", { class: "card muted" }, status === "open" ? "Không có sự cố đang mở." : "Không có sự cố.")]);
+    appendKids(box, [tabs, statusLine, data.items.length ? h("section", { class: "card ix-list", "aria-label": "Sự cố" }, data.items.map(row)) : h("div", { class: "card muted" }, empty)]);
     refreshLater(15000, token, load);
   }
   await load();
@@ -298,9 +304,9 @@ function span(ms) {
   if (hh < 24) return `${hh} giờ ${m % 60} phút`;
   return `${Math.floor(hh / 24)} ngày ${hh % 24} giờ`;
 }
-const STATE_TONE = { needs_human: "bad", awaiting_approval: "warn", investigating: "info", queued: "info", verifying: "info", handled: "ok", cleared: "ok", closed: "" };
+const STATE_TONE = { needs_human: "bad", awaiting_approval: "warn", waiting_quota: "warn", investigating: "info", queued: "info", verifying: "info", handled: "ok", cleared: "ok", closed: "" };
 const EV_MARK = { alert: "alert", alert_resolved: "clear", resolved: "clear", reopened: "alert", investigated: "agent", no_action: "agent", proposed: "agent",
-  ran: "human", verified: "clear", closed: "human", failed: "fail", denied: "fail", expired: "fail", error: "fail", stopped: "fail" };
+  ran: "human", verified: "clear", closed: "human", quota: "alert", failed: "fail", denied: "fail", expired: "fail", error: "fail", stopped: "fail" };
 const EV_FILTERS = [["all", "Tất cả"], ["action", "Hành động"], ["agent", "Điều tra"], ["alert", "Cảnh báo"]];
 
 async function incidentDetail(main, id) {
@@ -376,6 +382,11 @@ async function incidentDetail(main, id) {
               if (r.status !== "pending") toast(`Lệnh ${STEP_STATUS[r.status] || r.status}: ${r.reasons.join("; ")}`, true);
             }, "Đã tạo thẻ duyệt mới") }, "Nhờ agent đề xuất lại"),
             h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/actions/${w.action_id}/dismiss`), "Đã bỏ qua") }, "Bỏ qua")));
+      }
+      if (w.kind === "quota") {
+        return h("div", { class: "ix-item" }, h("span", { class: "ix-dot", "aria-hidden": "true" }),
+          h("div", {}, h("strong", {}, "Chờ quota"), h("span", { class: "small" }, `Tenant đã hết quota token trong ngày nên chưa điều tra. kagent tự điều tra lại lúc ${hmd(w.retry_at)} nếu sự cố còn mở; admin có thể tăng quota rồi bấm Điều tra lại.`)),
+          h("div", { class: "ix-acts" }, h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã bắt đầu điều tra lại") }, "Điều tra lại")));
       }
       const isError = w.kind === "error";
       return h("div", { class: "ix-item" }, h("span", { class: "ix-dot " + (isError ? "bad" : "info"), "aria-hidden": "true" }),

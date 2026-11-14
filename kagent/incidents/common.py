@@ -51,8 +51,8 @@ def _event(conn, tenant_id: str, incident_id: str, kind: str, text: str, data: d
 
 STAGE_LABEL = {"new": "mới", "investigating": "đang điều tra", "reported": "đã báo cáo, cần người xem", "awaiting_approval": "chờ duyệt",
                "verifying": "đang xác minh", "handled": "đã xử lý", "needs_human": "cần người xử lý", "error": "lỗi",
-               "cleared": "cảnh báo đã hết", "closed": "đã đóng"}
-WAITING_ON_HUMAN = ("new", "reported", "needs_human", "error")
+               "cleared": "cảnh báo đã hết", "closed": "đã đóng", "waiting_quota": "chờ quota"}
+WAITING_ON_HUMAN = ("new", "reported", "needs_human", "error", "waiting_quota")
 
 
 def _shown_stage(d: dict) -> str:
@@ -131,6 +131,8 @@ def who(e: dict, name) -> str:
         return f"{name(actor)} từ chối"
     if kind == "expired":
         return "hết hạn"
+    if kind == "quota":
+        return "hết quota"
     if kind == "closed":
         return f"{name(actor)} đóng" if actor else "đóng"
     return "kagent" if actor in (None, "kagent", "system") else name(actor)

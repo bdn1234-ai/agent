@@ -5,33 +5,48 @@ import json
 
 from .. import db
 from . import actions
-from .common import BOT, STAGE_LABEL, IncidentError, _cmd, _worse, _is_write, _label, _method_label, _running, _shown_stage, describe, who
+from .common import BOT, STAGE_LABEL, IncidentError, _cmd, first_sentence, _worse, _is_write, _label, _method_label, _running, _shown_stage, describe, who
 from .config import settings
 from .grouping import merged_from
 from .investigate import queued
 from .summary import summary_view
 
 
+ATTENTION = ("needs_human", "awaiting_approval", "waiting_quota")
+
+
 def list_incidents(conn, tenant_id: str, status: str = "open", limit: int = 100) -> list[dict]:
+    """status: open | resolved | closed | all | attention (đang mở và cần người: cần xử lý, chờ duyệt, chờ quota)."""
     where = "" if status == "all" else "AND status=?"
-    args = (tenant_id,) if status == "all" else (tenant_id, status)
+    args = (tenant_id,) if status == "all" else (tenant_id, "open" if status == "attention" else status)
     rs = conn.execute(f"SELECT * FROM incident WHERE tenant_id=? {where} ORDER BY last_alert_at DESC LIMIT ?", (*args, limit)).fetchall()
     out = []
     for r in rs:
         d = db.row(r, "evidence")
-        counts = conn.execute("SELECT count(*) n, sum(status='firing') f, group_concat(DISTINCT source) s FROM alert_event WHERE incident_id=?", (r["id"],)).fetchone()
+        d["investigating"] = r["id"] in _running
+        approvals = conn.execute("SELECT 1 FROM incident_action a JOIN approval_request q ON q.id=a.approval_id WHERE a.incident_id=? "
+                                 "AND a.status='pending' AND q.status='pending' LIMIT 1", (r["id"],)).fetchone() is not None
+        state = state_of(d, approvals)
+        if status == "attention" and state["key"] not in ATTENTION:
+            continue
+        counts = conn.execute("SELECT count(*) n, sum(status='firing') f, group_concat(DISTINCT source) s, min(coalesce(nullif(starts_at,''), first_seen)) first "
+                              "FROM alert_event WHERE incident_id=?", (r["id"],)).fetchone()
         last = conn.execute("SELECT * FROM incident_action WHERE incident_id=? AND origin='investigation' ORDER BY proposed_at DESC, rowid DESC LIMIT 1",
                             (r["id"],)).fetchone()
         last_action = view(dict(last)) if last else None
         d["stage"] = _shown_stage(d)
+        line = first_sentence(r["summary"], 220) or first_sentence(r["cause"] or r["root_cause"], 220)
+        if state["key"] == "waiting_quota":
+            line = "Chưa điều tra: tenant hết quota token trong ngày. Sẽ tự điều tra khi quota mở lại."
         out.append({**{k: d[k] for k in ("id", "env", "title", "severity", "status", "stage", "confidence", "created_at", "last_alert_at", "resolved_at")},
-                    "stage_label": STAGE_LABEL.get(d["stage"], d["stage"]), "alerts": counts["n"], "firing": counts["f"] or 0,
-                    "sources": (counts["s"] or "").split(",") if counts["s"] else [], "investigating": r["id"] in _running,
+                    "stage_label": STAGE_LABEL.get(d["stage"], d["stage"]), "state": state, "line": line, "first_alert": counts["first"],
+                    "alerts": counts["n"], "firing": counts["f"] or 0,
+                    "sources": (counts["s"] or "").split(",") if counts["s"] else [], "investigating": d["investigating"],
                     "last_action": {k: last_action.get(k) for k in ("tool", "args", "status", "risk_tier", "auto", "verified")} if last_action else None})
     return out
 
 
-SHOWN_EVENTS = ("investigated", "verified", "resolved", "reopened", "closed", "no_action", "stopped", "error",
+SHOWN_EVENTS = ("investigated", "verified", "resolved", "reopened", "closed", "no_action", "stopped", "error", "quota",
                 "proposed", "ran", "failed", "denied", "expired")
 
 
@@ -144,7 +159,7 @@ def get(conn, tenant_id: str, incident_id: str) -> dict:
             d["steps"] = [{"tool": s["tool"], "args": s.get("args"), "status": s["status"], "untrusted": bool(s.get("untrusted"))}
                           for s in json.loads(ep["trace"]) if s["type"] == "tool_call"]
     d["waiting"] = waiting(conn, d)
-    d["state"] = state_of(d)
+    d["state"] = state_of(d, any(w["kind"] == "approval" for w in d["waiting"]))
     d["milestones"] = {"first_alert": min((a["starts_at"] or a["first_seen"] for a in d["alerts"]), default=None), "received": d["created_at"],
                        "resolved": d["resolved_at"], "last_alert": d["last_alert_at"]}
     d["alert_groups"] = alert_groups(d["alerts"])
@@ -183,7 +198,10 @@ def waiting(conn, d: dict) -> list[dict]:
         items.append({**base, "kind": "retry", "status": row["status"], "at": row["ran_at"] or row["decided_at"], "result_line": row["result_line"],
                       "deny_reason": row["deny_reason"], "decided_by": _username(conn, row["decided_by"])})
     busy = d["investigating"] or d["stage"] == "investigating"
-    if is_open and not busy and d["stage"] == "error":
+    if is_open and not busy and d["stage"] == "waiting_quota":
+        items.append({"kind": "quota", "text": f"Tenant đã hết quota token trong ngày nên chưa điều tra. kagent tự điều tra lại lúc {d['investigate_after']} nếu sự cố còn mở; "
+                      "admin có thể tăng quota rồi bấm Điều tra lại.", "retry_at": d["investigate_after"]})
+    elif is_open and not busy and d["stage"] == "error":
         e = conn.execute("SELECT text FROM incident_event WHERE incident_id=? AND kind='error' ORDER BY id DESC LIMIT 1", (d["id"],)).fetchone()
         items.append({"kind": "error", "text": e["text"] if e else "điều tra lỗi"})
     elif is_open and not busy and not items and d["stage"] in ("reported", "needs_human"):
@@ -198,9 +216,8 @@ def bot_id(conn) -> str | None:
     return r["id"] if r else None
 
 
-def state_of(d: dict) -> dict:
-    """Một trạng thái cho chip đầu trang, theo việc đang chờ chứ không chỉ theo stage."""
-    approvals = any(w["kind"] == "approval" for w in d["waiting"])
+def state_of(d: dict, approvals: bool) -> dict:
+    """Một trạng thái cho chip, theo việc đang chờ chứ không chỉ theo stage. approvals: còn lệnh chờ duyệt."""
     if d["status"] == "closed":
         key, label = "closed", "Đã đóng"
     elif d["investigating"] or d["stage"] == "investigating":
@@ -213,6 +230,8 @@ def state_of(d: dict) -> dict:
         key, label = "verifying", "Đang xác minh"
     elif d["stage"] == "handled":
         key, label = "handled", "Đã xử lý"
+    elif d["stage"] == "waiting_quota":
+        key, label = "waiting_quota", "Chờ quota"
     elif d["stage"] == "new" and d["investigate_after"]:
         key, label = "queued", "Chờ điều tra"
     else:

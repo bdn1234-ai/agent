@@ -789,3 +789,27 @@ def test_model_error_during_investigation_marks_error_without_report(flow, users
     assert any(e["kind"] == "error" and "mất kết nối" in e["text"] for e in inc["timeline"])
     msg = flow.get(f"/api/conversations/{inc['conversation_id']}").json()["messages"][0]
     assert "mất kết nối" in msg["error"]
+
+
+def test_quota_exhausted_waits_and_reinvestigates_next_day(flow, users, clock, monkeypatch):
+    iid = _web_incident(users)
+    with db.session() as conn:
+        conn.execute("UPDATE tenant SET token_quota_daily=0 WHERE id=?", (tenant(users),))
+        incidents.investigate(conn, tenant(users), iid)
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["stage"] == "waiting_quota" and inc["state"]["label"] == "Chờ quota" and inc["waiting"][0]["kind"] == "quota"
+    assert inc["investigate_after"] > db.iso() and inc["investigate_after"].endswith("T00:00:00+00:00")
+    assert any(e["kind"] == "quota" and e["who"] == "hết quota" for e in inc["timeline"])
+    listed = flow.get("/api/incidents?status=attention").json()
+    item = next(i for i in listed["items"] if i["id"] == iid)
+    assert item["state"]["key"] == "waiting_quota" and item["line"].startswith("Chưa điều tra") and listed["counts"]["attention"] >= 1
+
+    started = []
+    monkeypatch.setattr(incidents, "start_investigation", lambda t, i: started.append(i))
+    flow.put("/api/alert-settings", json={"enabled": True, "sources": ["am"], "investigate": True})
+    with db.session() as conn:
+        incidents.tick(conn)
+        assert iid not in started  # chưa sang ngày
+        clock(24 * 60)
+        incidents.tick(conn)
+    assert iid in started
