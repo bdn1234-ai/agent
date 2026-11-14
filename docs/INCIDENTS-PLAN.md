@@ -14,7 +14,7 @@ và chờ duyệt khi cần, cuối cùng có một bản tóm tắt ngắn cho 
 | Hành động khắc phục hiện trong hội thoại điều tra | `2a0444e` |
 | Lệnh hết hạn duyệt hiện rõ: câu dẫn, lý do phải duyệt, giờ hết hạn, nút "Nhờ agent đề xuất lại"; "Ẩn hành động" không ẩn thẻ đã quyết | `b8a0716` |
 | Tóm tắt cho lãnh đạo: tự viết lại khi sự cố yên 5 phút sau hoạt động mới, 2–4 câu khoảng 400 ký tự, ở cuối hội thoại và đầu trang sự cố | `2acd66b` |
-| Gom đúng sự cố kéo dài: sự cố còn cảnh báo đang bắn luôn nhận cảnh báo mới; bắn lại trong 24 giờ sau khi hết thì mở lại sự cố cũ; sự cố đang mở khớp luật nhãn hoặc node/workload thì tự gộp vào sự cố cũ nhất, gộp mang theo lệnh chờ duyệt và link hội thoại cũ | (commit này) |
+| Gom đúng sự cố kéo dài: sự cố còn cảnh báo đang bắn luôn nhận cảnh báo mới; bắn lại trong 24 giờ sau khi hết thì mở lại sự cố cũ; sự cố đang mở khớp luật nhãn hoặc node/workload thì tự gộp vào sự cố cũ nhất, gộp mang theo lệnh chờ duyệt và link hội thoại cũ | `0526e95` |
 
 Đã chốt về bản tóm tắt: chỉ là phần tóm tắt cho lãnh đạo (chuyện gì, bao lâu, nguyên nhân, đang chờ gì). Chi tiết hành động và
 cảnh báo xem ở dòng sự kiện, không lặp lại trong bản tóm tắt, không có 5 Whys hay action item.
