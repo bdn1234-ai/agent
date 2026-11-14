@@ -287,78 +287,164 @@ async function incidentList(main) {
   await load();
 }
 
+const pad2 = (n) => String(n).padStart(2, "0");
+function hm(iso) { const d = new Date(iso); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+function dm(iso) { const d = new Date(iso); return `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}`; }
+function hmd(iso) { return iso ? `${hm(iso)} ${dm(iso)}` : "—"; }
+function span(ms) {
+  const m = Math.max(0, Math.round(ms / 60000));
+  if (m < 60) return `${m} phút`;
+  const hh = Math.floor(m / 60);
+  if (hh < 24) return `${hh} giờ ${m % 60} phút`;
+  return `${Math.floor(hh / 24)} ngày ${hh % 24} giờ`;
+}
+const STATE_TONE = { needs_human: "bad", awaiting_approval: "warn", investigating: "info", queued: "info", verifying: "info", handled: "ok", cleared: "ok", closed: "" };
+const EV_MARK = { alert: "alert", alert_resolved: "clear", resolved: "clear", reopened: "alert", investigated: "agent", no_action: "agent", proposed: "agent",
+  ran: "human", verified: "clear", closed: "human", failed: "fail", denied: "fail", expired: "fail", error: "fail", stopped: "fail" };
+const EV_FILTERS = [["all", "Tất cả"], ["action", "Hành động"], ["agent", "Điều tra"], ["alert", "Cảnh báo"]];
+
 async function incidentDetail(main, id) {
   const token = ++incidentTimer;
-  const box = h("div");
+  const box = h("div", { class: "ix" });
   main.append(box);
+  let filter = "all";
+  let menuOpen = false;
   async function load() {
     const [d, open] = await Promise.all([api("GET", `/api/incidents/${id}`), api("GET", "/api/incidents?status=open")]);
     const act = (fn, msg) => guard(async () => { await fn(); if (msg) toast(msg); await load(); });
-    const others = open.items.filter((i) => i.id !== d.id);
-    const into = h("select", { "aria-label": "Gộp vào sự cố" }, h("option", { value: "" }, "Gộp vào sự cố…"), others.map((i) => h("option", { value: i.id }, i.title)));
-    const closeNote = h("input", { placeholder: "Ghi chú khi đóng (tuỳ chọn)", "aria-label": "Ghi chú khi đóng" });
     const busyNow = d.investigating || d.stage === "investigating";
-    const head = h("div", { class: "card" },
-      h("div", { class: "row" }, h("button", { type: "button", class: "ghost small-btn", onclick: () => go("incidents") }, "← Danh sách")),
-      h("div", { class: "tool-head" }, sevBadge(d.severity), h("h3", {}, d.title), h("span", { class: "spacer" }),
-        h("span", { class: "badge " + (STAGE_CLASS[d.stage] || "") }, busyNow ? "đang điều tra" : d.stage_label), badge(d.status === "open" ? "active" : d.status), h("span", { class: "badge" }, d.env)),
-      h("div", { class: "small" }, `Mở ${ago(d.created_at)} · cảnh báo mới nhất ${ago(d.last_alert_at)}${d.resolved_at ? ` · hết lúc ${fmtTime(d.resolved_at)}` : ""}`),
-      d.merged_from && d.merged_from.length > 0 && h("div", { class: "small" }, `Gộp từ ${d.merged_from.length} sự cố: `,
-        d.merged_from.map((m, i) => [i ? ", " : "", m.conversation_id
-          ? h("a", { href: "#", title: `${m.auto ? "kagent tự gộp" : "người gộp"} lúc ${fmtTime(m.at)}`, onclick: (e) => { e.preventDefault(); go("chat", m.conversation_id); } }, m.title)
-          : m.title])),
-      d.status === "open" && h("div", { class: "row" },
-        h("button", { type: "button", class: "ghost small-btn", disabled: busyNow, onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã bắt đầu điều tra lại") }, busyNow ? "Đang điều tra…" : "Điều tra lại"),
-        others.length > 0 && into, others.length > 0 && h("button", { type: "button", class: "ghost small-btn", onclick: guard(async () => {
-          if (!into.value) { toast("Chọn sự cố để gộp vào", true); return; }
-          await api("POST", `/api/incidents/${id}/merge`, { into: into.value }); toast("Đã gộp"); go("incidents", undefined, into.value);
-        }) }, "Gộp"),
-        closeNote, h("button", { type: "button", class: "danger small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/close`, { note: closeNote.value }), "Đã đóng sự cố") }, "Đóng")));
-    const openChat = d.conversation_id && h("button", { type: "button", class: "ghost small-btn", onclick: () => go("chat", d.conversation_id) },
-      busyNow ? "Xem agent đang điều tra" : "Mở cuộc điều tra trong chat");
-    const recap = d.summary && summaryCard(d.summary, id);
-    const cause = h("div", { class: "card" }, h("div", { class: "tool-head" }, h("h3", {}, "Nguyên nhân"), h("span", { class: "spacer" }), openChat),
-      busyNow ? busy(d.queued === "slot" ? "Đang chờ tới lượt điều tra: các cuộc điều tra khác đang chạy…" : "Agent đang điều tra bằng các lệnh chỉ đọc…")
-        : d.episode_id ? [h("p", {}, d.root_cause || "Chưa rõ nguyên nhân."),
-            h("div", { class: "small" }, `Độ tin: ${(d.confidence || 0).toFixed(2)} · ${d.steps.length} lệnh đọc, chi tiết từng lệnh, token và câu trả lời đầy đủ ở hội thoại điều tra`),
-            d.evidence.length > 0 && h("ul", {}, d.evidence.map((e) => h("li", {}, e)))]
-        : h("div", { class: "small muted" }, "Chưa điều tra."));
+    const tone = STATE_TONE[d.state.key] || "";
+    const firing = d.alerts.filter((a) => a.status === "firing").length;
+    const m = d.milestones;
+    const started = m.first_alert || m.received;
+    const age = d.status === "open" ? `Đang mở ${span(Date.now() - new Date(started))}` : m.resolved ? `Đã hết sau ${span(new Date(m.resolved) - new Date(started))}` : "Đã đóng";
+
+    // Đầu trang: tiêu đề triệu chứng, chip trạng thái, nút chính; gộp và đóng nằm trong menu.
+    const others = open.items.filter((i) => i.id !== d.id);
+    const into = h("select", { "aria-label": "Gộp vào sự cố" }, h("option", { value: "" }, "Chọn sự cố…"), others.map((i) => h("option", { value: i.id }, `${i.title} (${dm(i.created_at)})`)));
+    const closeNote = h("input", { placeholder: "Ghi chú khi đóng (tuỳ chọn)", "aria-label": "Ghi chú khi đóng" });
+    const pop = h("div", { class: "ix-pop", id: "ix-pop", hidden: !menuOpen },
+      others.length > 0 && [h("label", { class: "small" }, "Gộp vào sự cố"), into, h("button", { type: "button", class: "ghost small-btn", onclick: guard(async () => {
+        if (!into.value) { toast("Chọn sự cố để gộp vào", true); return; }
+        await api("POST", `/api/incidents/${id}/merge`, { into: into.value }); toast("Đã gộp"); menuOpen = false; go("incidents", undefined, into.value);
+      }) }, "Gộp")],
+      h("label", { class: "small" }, "Đóng sự cố"), closeNote,
+      h("button", { type: "button", class: "danger small-btn", onclick: act(async () => { await api("POST", `/api/incidents/${id}/close`, { note: closeNote.value }); menuOpen = false; }, "Đã đóng sự cố") }, "Đóng sự cố"));
+    const more = h("button", { type: "button", class: "ghost small-btn", "aria-expanded": String(menuOpen), "aria-controls": "ix-pop",
+      onclick: () => { menuOpen = !menuOpen; pop.hidden = !menuOpen; more.setAttribute("aria-expanded", String(menuOpen)); } }, "Gộp, đóng…");
+    const where = d.grouped_by.map((g) => g.replace("=", " ")).join(", ");
+    const head = h("section", { class: "card ix-head " + tone, "aria-label": "Sự cố" },
+      h("div", {}, h("button", { type: "button", class: "ghost small-btn", onclick: () => go("incidents") }, "← Danh sách")),
+      h("div", { class: "ix-top" },
+        h("div", {}, h("span", { class: "ix-eyebrow" }, ["Sự cố", d.env, where].filter(Boolean).join(" · ")), h("h1", {}, d.title),
+          h("div", { class: "row" }, h("span", { class: "pill " + tone }, d.state.label), sevBadge(d.severity), h("span", { class: "pill" }, age),
+            h("span", { class: "pill " + (firing ? "warn" : "ok") }, `${firing}/${d.alerts.length} cảnh báo đang bắn`)),
+          d.merged_from.length > 0 && h("div", { class: "small" }, `Gộp từ ${d.merged_from.length} sự cố: `,
+            d.merged_from.map((x, i) => [i ? ", " : "", x.conversation_id
+              ? h("a", { href: "#", onclick: (e) => { e.preventDefault(); go("chat", x.conversation_id); } }, x.title) : x.title]))),
+        h("div", { class: "row" },
+          d.conversation_id && h("button", { type: "button", class: "small-btn", onclick: () => go("chat", d.conversation_id) }, busyNow ? "Xem agent đang điều tra" : "Mở hội thoại điều tra"),
+          d.status === "open" && h("button", { type: "button", class: "ghost small-btn", disabled: busyNow || d.stage === "verifying",
+            onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã bắt đầu điều tra lại") }, busyNow ? "Đang điều tra…" : "Điều tra lại"),
+          d.status !== "closed" && h("div", { class: "ix-menu" }, more, pop))));
+
+    // Đang chờ: việc cần người, mỗi việc kèm nút làm luôn.
+    const waitItem = (w) => {
+      if (w.kind === "approval") {
+        const reason = h("input", { placeholder: "Lý do từ chối", "aria-label": "Lý do từ chối" });
+        return h("div", { class: "ix-item" }, h("span", { class: "ix-dot", "aria-hidden": "true" }),
+          h("div", {}, h("strong", {}, w.summary || w.why || h("code", {}, w.command)), (w.summary || w.why) && h("code", {}, w.command),
+            h("span", { class: "small" }, `${w.requested_by || "kagent"} đề xuất, chờ duyệt tới ${hmd(w.expires_at)}${w.reasons.length ? `. Phải duyệt vì: ${w.reasons.join("; ")}` : ""}`),
+            w.dry_run && h("details", {}, h("summary", {}, "Kết quả chạy thử"), h("pre", {}, JSON.stringify(w.dry_run, null, 1))),
+            h("div", { class: "row" }, reason)),
+          h("div", { class: "ix-acts" },
+            h("button", { type: "button", class: "small-btn", onclick: act(() => api("POST", `/api/approvals/${w.approval_id}/decide`, { action: "approve_once" }), "Đã duyệt") }, "Duyệt và chạy"),
+            h("button", { type: "button", class: "ghost small-btn", onclick: guard(async () => {
+              if (!reason.value.trim()) { toast("Nhập lý do từ chối", true); reason.focus(); return; }
+              await api("POST", `/api/approvals/${w.approval_id}/decide`, { action: "deny", reason: reason.value.trim() }); toast("Đã từ chối"); await load();
+            }) }, "Từ chối")));
+      }
+      if (w.kind === "retry") {
+        const what = { expired: `Hết hạn duyệt lúc ${hmd(w.at)}, chưa chạy.`, denied: `${w.decided_by || "Người duyệt"} từ chối lúc ${hmd(w.at)}${w.deny_reason ? `: ${w.deny_reason}` : "."}`,
+          error: `Chạy lỗi lúc ${hmd(w.at)}${w.result_line ? `: ${w.result_line}` : "."}` }[w.status];
+        return h("div", { class: "ix-item" }, h("span", { class: "ix-dot bad", "aria-hidden": "true" }),
+          h("div", {}, h("strong", {}, w.summary || w.why || h("code", {}, w.command)), (w.summary || w.why) && h("code", {}, w.command),
+            h("span", { class: "small" }, what, w.status === "expired" && w.reasons.length ? ` Phải duyệt vì: ${w.reasons.join("; ")}` : "")),
+          h("div", { class: "ix-acts" },
+            h("button", { type: "button", class: "ghost small-btn", onclick: act(async () => {
+              const r = await api("POST", `/api/incidents/${id}/actions/${w.action_id}/retry`);
+              if (r.status !== "pending") toast(`Lệnh ${STEP_STATUS[r.status] || r.status}: ${r.reasons.join("; ")}`, true);
+            }, "Đã tạo thẻ duyệt mới") }, "Nhờ agent đề xuất lại"),
+            h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/actions/${w.action_id}/dismiss`), "Đã bỏ qua") }, "Bỏ qua")));
+      }
+      const isError = w.kind === "error";
+      return h("div", { class: "ix-item" }, h("span", { class: "ix-dot " + (isError ? "bad" : "info"), "aria-hidden": "true" }),
+        h("div", {}, h("strong", {}, isError ? "Điều tra lỗi" : "Cần người xem"), h("span", { class: "small" }, w.text)),
+        h("div", { class: "ix-acts" }, isError
+          ? h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/investigate`), "Đã bắt đầu điều tra lại") }, "Điều tra lại")
+          : d.conversation_id && h("button", { type: "button", class: "ghost small-btn", onclick: () => go("chat", d.conversation_id) }, "Hỏi tiếp trong hội thoại")));
+    };
+    const wait = d.waiting.length > 0 && h("section", { class: "card ix-wait", "aria-labelledby": "ix-wait-h" },
+      h("div", { class: "ix-sec" }, h("h2", { id: "ix-wait-h" }, "Đang chờ"), h("span", { class: "small" }, `${d.waiting.length} việc`)),
+      d.waiting.map(waitItem));
+
+    // Dòng sự kiện: nhóm theo ngày, lọc theo loại.
+    const tl = h("ol", { class: "ix-tl" });
+    const paint = () => {
+      const kids = [];
+      let day = null;
+      for (const e of d.timeline) {
+        if (filter !== "all" && e.cat !== filter) continue;
+        if (dm(e.at) !== day) { day = dm(e.at); kids.push(h("li", { class: "ix-day" }, "Ngày " + day)); }
+        kids.push(h("li", { class: "ix-ev" }, h("time", { datetime: e.at, title: fmtTime(e.at) }, hm(e.at)),
+          h("div", { class: "ix-mark " + (EV_MARK[e.kind] || "") }, h("span", {})),
+          h("div", { class: "ix-body" }, h("span", { class: "ix-who" }, e.who), h("span", { class: "ix-res" }, e.text))));
+      }
+      tl.replaceChildren(...(kids.length ? kids : [h("li", { class: "small muted" }, "Chưa có sự kiện.")]));
+    };
+    paint();
+    const filters = h("div", { class: "ix-filters", role: "group", "aria-label": "Lọc dòng sự kiện" });
+    const paintFilters = () => filters.replaceChildren(...EV_FILTERS.map(([k, label]) => h("button", { type: "button", class: "chip" + (filter === k ? " on" : ""),
+      "aria-pressed": String(filter === k), onclick: () => { filter = k; paintFilters(); paint(); } }, label)));
+    paintFilters();
+    const events = h("section", { class: "card", "aria-labelledby": "ix-tl-h" }, h("div", { class: "ix-sec" }, h("h3", { id: "ix-tl-h" }, "Dòng sự kiện"), filters), tl);
+
+    // Cột phải.
+    const detect = m.first_alert && new Date(m.received) - new Date(m.first_alert);
+    const times = h("section", { class: "card", "aria-labelledby": "ix-t-h" }, h("div", { class: "ix-sec" }, h("h3", { id: "ix-t-h" }, "Mốc thời gian")),
+      h("dl", { class: "ix-kv" },
+        h("dt", {}, "Bắt đầu"), h("dd", {}, hmd(m.first_alert)),
+        h("dt", {}, "kagent nhận"), h("dd", {}, hmd(m.received)),
+        h("dt", {}, "Thời gian phát hiện"), h("dd", {}, detect > 0 ? h("span", { class: "pill " + (detect > 15 * 60000 ? "warn" : "") }, span(detect)) : "ngay"),
+        h("dt", {}, "Phục hồi"), h("dd", {}, m.resolved ? hmd(m.resolved) : "chưa"),
+        h("dt", {}, m.resolved ? "Kéo dài" : "Đã kéo dài"), h("dd", {}, span((m.resolved ? new Date(m.resolved) : Date.now()) - new Date(started)))));
     const alertRows = d.alerts.map((a) => {
       const keys = ["namespace", "service", "pod", "node", "job", "instance"].filter((k) => a.labels[k]).map((k) => `${k}=${a.labels[k]}`).join(" ");
-      return h("tr", {}, h("td", {}, h("strong", {}, a.alertname || "?"), h("div", { class: "small" }, a.summary || "")), h("td", {}, sevBadge(a.severity)),
-        h("td", {}, h("span", { class: "badge " + (a.status === "firing" ? "warn" : "ok") }, a.status === "firing" ? "đang bắn" : "đã hết")),
-        h("td", { class: "small" }, keys), h("td", { class: "small" }, ago(a.starts_at || a.first_seen)),
-        h("td", { class: "small" }, a.join_method === "root" ? "gốc" : `${a.join_label}${a.join_method === "ai" ? ` ${(a.join_score || 0).toFixed(2)}` : ""}: ${a.join_reason || ""}`),
+      return h("tr", {}, h("td", {}, h("strong", {}, a.alertname || "?"), h("div", { class: "small" }, keys), h("div", { class: "small" }, a.summary || "")),
+        h("td", { class: "small" }, `${a.status === "firing" ? "đang bắn" : "đã hết"} · từ ${hmd(a.starts_at || a.first_seen)}`,
+          h("div", {}, a.join_method === "root" ? "gốc" : `${a.join_label}: ${a.join_reason || ""}`)),
         h("td", {}, d.alerts.length > 1 && a.join_method !== "root" && h("button", { type: "button", class: "ghost small-btn", onclick: act(() => api("POST", `/api/incidents/${id}/split`, { alert_id: a.id }), "Đã tách thành sự cố riêng") }, "Tách")));
     });
-    const alerts = h("div", { class: "card" }, h("h3", {}, `Cảnh báo (${d.alerts.length})`),
-      h("table", { class: "incident-table" }, h("thead", {}, h("tr", {}, ["Cảnh báo", "Mức", "Trạng thái", "Nhãn", "Bắt đầu", "Vì sao gộp", ""].map((t) => h("th", {}, t)))), h("tbody", {}, alertRows)));
-    const actions = h("div", { class: "card" }, h("h3", {}, "Hành động"),
-      d.actions.length ? d.actions.map((a) => {
-        const status = a.approval_status && a.status === "pending" ? a.approval_status : a.status;
-        const reason = h("input", { placeholder: "Lý do từ chối", "aria-label": "Lý do từ chối" });
-        return h("div", { class: "rbac-rule" },
-          h("div", { class: "tool-head" }, h("code", {}, actionText(a)), a.risk_tier && h("span", { class: "badge" }, a.risk_tier),
-            h("span", { class: "badge " + ({ ok: "ok", pending: "warn" }[status] || "bad") }, `${STEP_STATUS[status] || status}${a.auto ? " (tự động)" : ""}`),
-            a.verified === true && h("span", { class: "badge ok" }, "đã hết cảnh báo"), a.verified === false && h("span", { class: "badge bad" }, "cảnh báo vẫn còn")),
-          a.why && h("div", { class: "small" }, a.why),
-          a.reasons && a.reasons.length > 0 && h("div", { class: "small warn-text" }, (a.auto ? "Ghi chú: " : "Không tự chạy vì: ") + a.reasons.join("; ")),
-          a.dry_run && h("details", {}, h("summary", { class: "small" }, "Kết quả chạy thử"), h("pre", {}, JSON.stringify(a.dry_run, null, 1))),
-          a.result && h("details", {}, h("summary", { class: "small" }, "Kết quả"), h("pre", {}, a.result)),
-          status === "pending" && a.approval_id && h("div", { class: "row" },
-            h("button", { type: "button", onclick: act(() => api("POST", `/api/approvals/${a.approval_id}/decide`, { action: "approve_once" }), "Đã duyệt") }, "Duyệt và chạy"),
-            reason, h("button", { type: "button", class: "ghost", onclick: guard(async () => {
-              if (!reason.value.trim()) { toast("Nhập lý do từ chối", true); return; }
-              await api("POST", `/api/approvals/${a.approval_id}/decide`, { action: "deny", reason: reason.value.trim() }); toast("Đã từ chối"); await load();
-            }) }, "Từ chối")));
-      }) : h("div", { class: "small muted" }, d.episode_id ? "Không có hành động được đề xuất." : "Chưa có."));
-    const TL_CLASS = { alert: "warn", alert_resolved: "ok", ran: "info", failed: "bad", denied: "warn", expired: "warn", proposed: "", verified: "ok", resolved: "ok", investigated: "", closed: "" };
-    const timeline = h("div", { class: "card" }, h("h3", {}, "Dòng thời gian"),
-      h("ul", { class: "timeline" }, d.timeline.map((e) => h("li", { class: "tl-" + e.kind }, h("span", { class: "small" }, fmtTime(e.at)), " ",
-        TL_CLASS[e.kind] ? h("span", { class: "badge " + TL_CLASS[e.kind] }, { alert: "cảnh báo", alert_resolved: "hết", ran: "khắc phục", failed: "lỗi", denied: "từ chối", expired: "hết hạn", verified: "xác minh", resolved: "đã hết" }[e.kind]) : null, " ", e.text))));
+    const alerts = h("section", { class: "card", "aria-labelledby": "ix-a-h" },
+      h("div", { class: "ix-sec" }, h("h3", { id: "ix-a-h" }, `Cảnh báo (${d.alerts.length})`), d.grouped_by.length > 0 && h("span", { class: "small" }, "gộp theo " + d.grouped_by.join(", "))),
+      h("div", { style: "margin-top:8px" }, d.alert_groups.map((g) => h("div", { class: "ix-al" }, h("span", {}, g.alertname),
+        h("span", { class: "pill " + (g.firing ? "warn" : "ok") }, g.firing ? `${g.firing} đang bắn` : `${g.resolved} đã hết`)))),
+      h("details", { style: "margin-top:8px" }, h("summary", {}, "Xem nhãn, giờ bắt đầu, tách cảnh báo"), h("table", { class: "incident-table" }, h("tbody", {}, alertRows))));
+    const c = d.cause;
+    const cause = h("section", { class: "card ix-cause", "aria-labelledby": "ix-c-h" },
+      h("div", { class: "ix-sec" }, h("h3", { id: "ix-c-h" }, "Nguyên nhân"),
+        c && h("span", { class: "small" }, [c.round ? `lượt điều tra ${c.round}` : null, c.at ? hmd(c.at) : null, `độ tin ${(c.confidence || 0).toFixed(2)}`].filter(Boolean).join(" · "))),
+      busyNow ? busy(d.queued === "slot" ? "Đang chờ tới lượt điều tra…" : "Agent đang điều tra bằng các lệnh chỉ đọc…") : null,
+      c ? [h("p", {}, c.text || "Chưa rõ nguyên nhân."),
+        h("details", {}, h("summary", {}, `${c.steps} lệnh đọc và bằng chứng`),
+          c.evidence.length ? h("ul", { class: "small" }, c.evidence.map((e) => h("li", {}, e))) : h("p", { class: "small" }, "Không có bằng chứng được ghi."),
+          d.conversation_id && h("a", { href: "#", class: "small", onclick: (e) => { e.preventDefault(); go("chat", d.conversation_id); } }, "Từng lệnh và câu trả lời đầy đủ ở hội thoại điều tra"))]
+        : !busyNow && h("p", { class: "small muted" }, "Chưa điều tra."));
+
+    const recap = d.summary && summaryCard(d.summary, id);
     box.replaceChildren();
-    appendKids(box, [head, recap, cause, alerts, actions, timeline]);
-    if (d.status === "open" && (busyNow || ["new", "awaiting_approval", "verifying"].includes(d.stage))) refreshLater(8000, token, load);
+    appendKids(box, [head, wait, h("div", { class: "ix-grid" }, h("div", { class: "ix-col" }, recap, events), h("aside", { class: "ix-col", "aria-label": "Thông tin sự cố" }, times, alerts, cause))]);
+    if (!menuOpen && d.status === "open" && (busyNow || ["new", "awaiting_approval", "verifying"].includes(d.stage))) refreshLater(8000, token, load);
   }
   await load();
 }

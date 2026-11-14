@@ -7,7 +7,7 @@ import threading
 
 from .. import db, live
 from .actions import act
-from .common import IncidentError, _event, _lock, _running, _slots, _waiting
+from .common import IncidentError, first_sentence, _event, _lock, _running, _slots, _waiting
 from .config import bot_user
 from .grouping import _brief
 
@@ -127,13 +127,17 @@ def _investigate_run(conn, tenant_id: str, incident_id: str, inc, user: str, tas
     try:
         report = llm.get_provider().incident_report(data, {t["tool"] for t in tools})
     except llm.LLMError as exc:
-        report = {"title": "", "root_cause": f"không viết được báo cáo: {exc}", "confidence": 0.0, "evidence": [], "actions": []}
+        report = {"symptom": "", "root_cause": f"không viết được báo cáo: {exc}", "confidence": 0.0, "evidence": [], "actions": []}
+    now = db.iso()
     with db.tx(conn):
-        conn.execute("UPDATE incident SET title=COALESCE(NULLIF(?,''), title), root_cause=?, confidence=?, evidence=?, episode_id=?, updated_at=? WHERE id=?",
-                     (report["title"], report["root_cause"], report["confidence"], json.dumps(report["evidence"], ensure_ascii=False), ep["id"], db.iso(), incident_id))
+        conn.execute("UPDATE incident SET title=COALESCE(NULLIF(?,''), title), root_cause=?, cause=?, cause_at=?, cause_episode=?, "
+                     "investigations=investigations+1, confidence=?, evidence=?, episode_id=?, updated_at=? WHERE id=?",
+                     (report["symptom"], report["root_cause"], report["root_cause"], now, ep["id"], report["confidence"],
+                      json.dumps(report["evidence"], ensure_ascii=False), ep["id"], now, incident_id))
+        n = conn.execute("SELECT investigations FROM incident WHERE id=?", (incident_id,)).fetchone()["investigations"]
         _event(conn, tenant_id, incident_id, "investigated",
-               f"nhận định: {report['title'] or inc['title']} (độ tin {report['confidence']:.2f})",
-               {"episode_id": ep["id"], "steps": len(steps)})
+               f"{len(steps)} lệnh đọc → {first_sentence(report['root_cause']) or 'chưa rõ nguyên nhân'} (độ tin {report['confidence']:.2f})",
+               {"episode_id": ep["id"], "steps": len(steps), "round": n}, actor="kagent")
     return act(conn, tenant_id, incident_id, report, user, ep["id"], alerts, steps)
 
 

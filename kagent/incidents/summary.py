@@ -73,7 +73,7 @@ def _summary_input(conn, inc) -> dict:
     from .actions import rows
     from .views import timeline  # views đọc summary_view: nhập muộn để tránh vòng
     alerts = [dict(r) for r in conn.execute("SELECT * FROM alert_event WHERE incident_id=? ORDER BY starts_at", (inc["id"],)).fetchall()]
-    events = [{k: e[k] for k in ("at", "kind", "text")} for e in timeline(conn, dict(inc), alerts)]
+    events = [{"at": e["at"], "kind": e["kind"], "text": f"{e['who']}: {e['text']}"} for e in timeline(conn, dict(inc), alerts)]
     bot = bot_user(conn, inc["tenant_id"])
     turns = []
     for ep in conn.execute("SELECT user_id, started_at, input, trace FROM episode WHERE conversation_id=? ORDER BY started_at", (inc["conversation_id"],)).fetchall():
@@ -93,7 +93,7 @@ def _summary_input(conn, inc) -> dict:
     return {"now": db.iso(),
             "incident": {"title": inc["title"], "env": inc["env"], "severity": inc["severity"], "status": inc["status"],
                          "stage": STAGE_LABEL.get(shown, shown), "opened_at": inc["created_at"], "resolved_at": inc["resolved_at"],
-                         "root_cause": inc["root_cause"]},
+                         "root_cause": inc["cause"] or inc["root_cause"]},
             "alerts": [{"alertname": a["alertname"], "severity": a["severity"], "status": a["status"], "starts_at": a["starts_at"], "resolved_at": a["resolved_at"],
                         "summary": (a["summary"] or "")[:200]} for a in alerts[:20]],
             "events": events[-40:], "actions": actions, "turns": turns[-8:],

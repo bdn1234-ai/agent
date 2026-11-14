@@ -113,6 +113,23 @@ def _rule_match(conn, labels: dict, cfg: dict, incidents_) -> tuple | None:
     return None
 
 
+def alert_title(alertname: str | None, labels: dict) -> str:
+    """Tiêu đề trước khi điều tra: tên cảnh báo và nơi bắn."""
+    where = labels.get("namespace") or labels.get("service") or labels.get("job") or labels.get("instance")
+    return f"{alertname or 'Cảnh báo'}{f' · {where}' if where else ''}"[:200]
+
+
+def reset_long_titles(conn) -> int:
+    """Tiêu đề cũ là câu kết luận dài của báo cáo: về lại tiêu đề theo cảnh báo gốc, tới khi lượt điều tra sau viết triệu chứng."""
+    n = 0
+    for inc in conn.execute("SELECT id, title FROM incident WHERE length(title) > 80").fetchall():
+        root = conn.execute("SELECT alertname, labels FROM alert_event WHERE incident_id=? ORDER BY join_method!='root', starts_at LIMIT 1", (inc["id"],)).fetchone()
+        if root:
+            conn.execute("UPDATE incident SET title=? WHERE id=?", (alert_title(root["alertname"], json.loads(root["labels"])), inc["id"]))
+            n += 1
+    return n
+
+
 def _attach(conn, tenant_id: str, a, labels: dict, found, cfg: dict, reopen: bool = False) -> str:
     alert_id = a["id"]
     now = db.iso()
@@ -132,11 +149,9 @@ def _attach(conn, tenant_id: str, a, labels: dict, found, cfg: dict, reopen: boo
                {"alert_id": alert_id, "method": method, "score": score})
         return incident_id
     incident_id = db.new_id()
-    title = a["alertname"] or "Cảnh báo"
-    where = labels.get("namespace") or labels.get("service") or labels.get("job") or labels.get("instance")
     conn.execute("INSERT INTO incident(id,tenant_id,env,title,severity,status,stage,created_at,updated_at,last_alert_at,investigate_after) "
                  "VALUES (?,?,?,?,?,'open','new',?,?,?,?)",
-                 (incident_id, tenant_id, a["env"], f"{title}{f' · {where}' if where else ''}"[:200], a["severity"], now, now, now,
+                 (incident_id, tenant_id, a["env"], alert_title(a["alertname"], labels), a["severity"], now, now, now,
                   _later(cfg["debounce_seconds"]) if cfg["investigate"] else None))
     conn.execute("UPDATE alert_event SET incident_id=?, join_method='root', join_score=1.0, join_reason='cảnh báo mở sự cố' WHERE id=?", (incident_id, alert_id))
     _event(conn, tenant_id, incident_id, "opened", f"mở sự cố từ cảnh báo {a['alertname']}", {"alert_id": alert_id})
@@ -254,4 +269,4 @@ def close(conn, tenant_id: str, incident_id: str, user: str, note: str = "") -> 
     if inc is None:
         raise IncidentError("không tìm thấy sự cố", 404)
     conn.execute("UPDATE incident SET status='closed', closed_by=?, investigate_after=NULL, updated_at=? WHERE id=?", (user, db.iso(), incident_id))
-    _event(conn, tenant_id, incident_id, "closed", "người dùng đóng sự cố" + (f": {note[:300]}" if note else ""), {"by": user})
+    _event(conn, tenant_id, incident_id, "closed", "đóng sự cố" + (f": {note[:300]}" if note else ""), {"by": user}, actor=user)

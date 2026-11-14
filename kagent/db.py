@@ -352,6 +352,16 @@ def init_schema(conn: sqlite3.Connection) -> None:
     if fresh_actions:
         from .incidents import actions
         actions.migrate(conn)
+    if "cause" not in incident_cols:
+        # Nguyên nhân theo lượt điều tra mới nhất; root_cause cũ chỉ là lượt đầu tiên.
+        for column, ddl in (("cause", "TEXT"), ("cause_at", "TEXT"), ("cause_episode", "TEXT"), ("investigations", "INTEGER NOT NULL DEFAULT 0")):
+            conn.execute(f"ALTER TABLE incident ADD COLUMN {column} {ddl}")
+        conn.execute("UPDATE incident SET cause=root_cause, cause_episode=episode_id, "
+                     "cause_at=(SELECT max(at) FROM incident_event e WHERE e.incident_id=incident.id AND e.kind='investigated'), "
+                     "investigations=(SELECT count(*) FROM incident_event e WHERE e.incident_id=incident.id AND e.kind='investigated')")
+        from .incidents import actions, grouping
+        actions.rebuild_events(conn)  # sự kiện của lệnh viết lại theo dạng "lệnh → kết quả", người làm tính lúc đọc
+        grouping.reset_long_titles(conn)
     if "alert_settings" not in {r["name"] for r in conn.execute("PRAGMA table_info(tenant)")}:
         conn.execute("ALTER TABLE tenant ADD COLUMN alert_settings TEXT NOT NULL DEFAULT '{}'")  # luồng tự xử lý cảnh báo (incidents.py)
     registry = {r["name"] for r in conn.execute("PRAGMA table_info(tool_registry)")}

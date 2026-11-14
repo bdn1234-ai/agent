@@ -9,8 +9,8 @@ Lệnh do tài khoản bot "kagent-alerts" của tenant gọi, nên audit, chín
 from __future__ import annotations
 
 from .. import db
-from .actions import act, follow_up, has_pending, migrate, on_approval, record_chat_action, result_line, strip_dry_run
-from .common import (BOT, SEVERITY, SOURCE_TEMPLATES, STAGE_LABEL, STAGES, WAITING_ON_HUMAN, IncidentError, MANIFEST_VERBS, describe, _cmd, _event, _is_write, _later,
+from .actions import act, dismiss, follow_up, has_pending, migrate, rebuild_events, retry, on_approval, record_chat_action, result_line, strip_dry_run
+from .common import (BOT, first_sentence, who, SEVERITY, SOURCE_TEMPLATES, STAGE_LABEL, STAGES, WAITING_ON_HUMAN, IncidentError, MANIFEST_VERBS, describe, _cmd, _event, _is_write, _later,
                      _lock, _method_label, _running, _shown_stage, _slots, _state, _summarizing, _summary_failed, _waiting, _worse)
 from .config import DEFAULTS, bot_user, check_settings, save_settings, settings
 from .grouping import (EXPORTER_JOBS, EXPORTER_LABELS, _attach, _brief, _feedback, _maybe_resolved, _owner, _rule_match, assign, auto_merge,

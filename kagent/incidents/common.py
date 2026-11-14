@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 from datetime import timedelta
 
@@ -103,3 +104,33 @@ def _label(row: dict) -> str:
     args = json.loads(row["args"]) if isinstance(row.get("args"), str) else row.get("args")
     what = describe(args)
     return _cmd(row) + (f" ({what})" if what else "")
+
+
+def first_sentence(text: str | None, limit: int = 160) -> str:
+    text = " ".join((text or "").split())
+    m = re.search(r"[.;!?](\s|$)", text)
+    out = text[:m.start()] if m else text
+    return out if len(out) <= limit else out[:limit - 1].rstrip() + "…"
+
+
+def who(e: dict, name) -> str:
+    """Ai làm, cho một dòng của dòng sự kiện; name(actor) → tên hiện. Tính lúc đọc để câu trong sự kiện chỉ còn "việc → kết quả"."""
+    kind, actor = e["kind"], e.get("actor")
+    data = e.get("data") or {}
+    if kind in ("alert", "alert_resolved", "resolved", "reopened"):
+        return "cảnh báo"
+    if kind == "investigated":
+        return f"kagent · điều tra lần {data['round']}" if data.get("round") else "kagent · điều tra"
+    if kind == "proposed":
+        return "kagent đề xuất" if actor == "kagent" else f"{name(actor)} yêu cầu"
+    if kind in ("ran", "failed"):
+        if data.get("auto"):
+            return "tự động" if data.get("origin") == "investigation" else f"{name(actor)} chạy"
+        return f"{name(actor)} duyệt"
+    if kind == "denied":
+        return f"{name(actor)} từ chối"
+    if kind == "expired":
+        return "hết hạn"
+    if kind == "closed":
+        return f"{name(actor)} đóng" if actor else "đóng"
+    return "kagent" if actor in (None, "kagent", "system") else name(actor)

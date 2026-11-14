@@ -1573,6 +1573,21 @@ def incident_close(incident_id: str, body: IncidentClose, t: Tenant = Depends(cu
     return {"ok": True}
 
 
+@app.post("/api/incidents/{incident_id}/actions/{action_id}/retry")
+def incident_action_retry(incident_id: str, action_id: str, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    t.require_writer()
+    row = _incident_call(lambda: incidents.retry(conn, t.tenant_id, incident_id, action_id, t.user_id))
+    return {"status": row["status"], "approval_id": row["approval_id"], "reasons": json.loads(row["reasons"])}
+
+
+@app.post("/api/incidents/{incident_id}/actions/{action_id}/dismiss")
+def incident_action_dismiss(incident_id: str, action_id: str, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    t.require_writer()
+    with db.tx(conn):
+        _incident_call(lambda: incidents.dismiss(conn, t.tenant_id, incident_id, action_id))
+    return {"ok": True}
+
+
 @app.post("/api/incidents/{incident_id}/investigate")
 def incident_investigate(incident_id: str, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
     t.require_writer()

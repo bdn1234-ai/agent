@@ -5,7 +5,7 @@ import json
 from datetime import timedelta
 
 from .. import db
-from .common import BOT, _event, _label, _later
+from .common import BOT, IncidentError, _event, _label, _later
 from .config import settings
 from .ingest import poll
 
@@ -53,39 +53,46 @@ def _actor(conn, user_id: str | None) -> str | None:
     return "kagent" if r and r["username"] == BOT else user_id
 
 
-def _name(conn, user_id: str | None) -> str:
-    r = conn.execute("SELECT username FROM app_user WHERE id=?", (user_id,)).fetchone() if user_id else None
-    return "kagent" if r and r["username"] == BOT else r["username"] if r else "người dùng"
-
-
-def _proposed_text(conn, row: dict) -> str:
-    who = "kagent đề xuất" if row["origin"] == "investigation" else f"{_name(conn, row['requested_by'])} yêu cầu"
-    outcome = {"pending": "cần duyệt", "blocked": "bị chặn", "invalid": "sai tham số"}.get(row["status"], row["status"])
+def _proposed_text(row: dict) -> str:
+    first = "pending" if row["approval_id"] else row["status"]  # trạng thái lúc đề xuất; row có thể đã được quyết sau đó
+    outcome = {"pending": "cần duyệt", "blocked": "bị chặn", "invalid": "sai tham số"}.get(first, first)
     reasons = json.loads(row["reasons"] or "[]")
-    return f"{who} {_label(row)} → {outcome}" + (f": {'; '.join(reasons)}" if reasons else "")
+    return f"{_label(row)} → {outcome}" + (f": {'; '.join(reasons)}" if reasons else "")
 
 
-def _outcome_event(conn, row: dict, at: str | None = None) -> None:
-    """Sự kiện kết quả của lệnh: chạy xong, lỗi, bị từ chối, hết hạn. Người duyệt ghi trên chính dòng của lệnh."""
-    cmd, status = _label(row), row["status"]
-    if status in DONE:
-        by = (" (tự động)" if row["origin"] == "investigation" else "") if row["auto"] else f" ({_name(conn, row['decided_by'])} duyệt)"
-        line = f" → {row['result_line']}" if row["result_line"] else ""
-        kind, text = ("ran", f"chạy {cmd}{by}{line}") if status == "ok" else ("failed", f"chạy {cmd}{by} lỗi{line.replace(' → ', ': ', 1)}")
-        actor = (_actor(conn, row["requested_by"]) if row["auto"] else row["decided_by"])
+def _data(row: dict) -> dict:
+    """Dữ liệu để tính "ai làm" lúc đọc (common.who)."""
+    return {"tool": row["tool"], "status": row["status"], "origin": row["origin"], "auto": bool(row["auto"])}
+
+
+def _outcome_event(conn, row: dict) -> None:
+    """Sự kiện kết quả của lệnh: chạy xong, lỗi, bị từ chối, hết hạn. Người duyệt là actor của chính dòng này."""
+    label, status = _label(row), row["status"]
+    if status == "ok":
+        kind, actor, text = "ran", None, f"{label} → {row['result_line'] or 'đã chạy'}"
+    elif status == "error":
+        kind, actor, text = "failed", None, f"{label} → lỗi" + (f": {row['result_line']}" if row["result_line"] else "")
     elif status == "denied":
-        kind, actor = "denied", row["decided_by"]
-        text = f"{_name(conn, row['decided_by'])} từ chối {cmd}" + (f": {row['deny_reason']}" if row["deny_reason"] else "")
+        kind, actor, text = "denied", row["decided_by"], f"{label} → từ chối" + (f": {row['deny_reason']}" if row["deny_reason"] else "")
     elif status == "expired":
-        kind, actor, text = "expired", "system", f"hết hạn duyệt, chưa chạy {cmd}"
+        kind, actor, text = "expired", "system", f"{label} → hết hạn duyệt, chưa chạy"
     else:
         return
-    _event(conn, row["tenant_id"], row["incident_id"], kind, text, {"tool": row["tool"], "status": status}, actor=actor, action_id=row["id"],
-           at=at or row["ran_at"] or row["decided_at"])
+    if actor is None:
+        actor = _actor(conn, row["requested_by"]) if row["auto"] else row["decided_by"]
+    _event(conn, row["tenant_id"], row["incident_id"], kind, text, _data(row), actor=actor, action_id=row["id"], at=row["ran_at"] or row["decided_at"])
+
+
+def _emit(conn, row: dict) -> None:
+    """Sự kiện của một lệnh: đề xuất (khi không tự chạy ngay), rồi kết quả nếu đã có."""
+    if not row["auto"]:
+        _event(conn, row["tenant_id"], row["incident_id"], "proposed", _proposed_text(row), _data(row),
+               actor=_actor(conn, row["requested_by"]), action_id=row["id"], at=row["proposed_at"])
+    _outcome_event(conn, row)
 
 
 def _insert(conn, tenant_id: str, incident_id: str, origin: str, requested_by: str, step: dict, episode_id: str | None, why: str | None,
-            at: str | None = None, events: bool = True) -> dict:
+            at: str | None = None) -> dict:
     status = step["status"]
     now = at or db.iso()
     row = {"id": db.new_id(), "tenant_id": tenant_id, "incident_id": incident_id, "episode_id": episode_id, "approval_id": step.get("approval_id"),
@@ -96,13 +103,19 @@ def _insert(conn, tenant_id: str, incident_id: str, origin: str, requested_by: s
            "result": _dump(step.get("result")), "result_line": result_line(step.get("result")) if status in DONE else None,
            "verified": None, "verified_at": None, "superseded_by": None}
     conn.execute(f"INSERT INTO incident_action({','.join(row)}) VALUES ({','.join('?' * len(row))})", tuple(row.values()))
-    if events:
-        if status in DONE:
-            _outcome_event(conn, row)
-        else:
-            _event(conn, tenant_id, incident_id, "proposed", _proposed_text(conn, row), {"tool": row["tool"], "status": status},
-                   actor=_actor(conn, requested_by), action_id=row["id"], at=now)
+    _emit(conn, row)
     return row
+
+
+ACTION_EVENTS = ("proposed", "ran", "failed", "denied", "expired")
+
+
+def rebuild_events(conn) -> None:
+    """Viết lại sự kiện của mọi lệnh từ incident_action theo giờ gốc (khi đổi dạng câu của sự kiện)."""
+    with db.tx(conn):
+        conn.execute("DELETE FROM incident_event WHERE action_id IS NOT NULL AND kind IN (%s)" % ",".join("?" * len(ACTION_EVENTS)), ACTION_EVENTS)
+        for row in conn.execute("SELECT * FROM incident_action ORDER BY proposed_at, rowid").fetchall():
+            _emit(conn, dict(row))
 
 
 def _settle(conn, row: dict, req) -> dict | None:
@@ -213,6 +226,53 @@ def on_approval(conn, tenant_id: str, approval_id: str) -> None:
     """Gọi ngay sau khi có người duyệt/từ chối, để sự cố không phải đợi vòng nền."""
     for r in conn.execute("SELECT DISTINCT incident_id FROM incident_action WHERE approval_id=? AND tenant_id=?", (approval_id, tenant_id)).fetchall():
         _sync(conn, tenant_id, r["incident_id"])
+
+
+RETRYABLE = {"expired": "đã hết hạn duyệt", "denied": "đã bị từ chối", "error": "đã chạy lỗi"}
+
+
+def _retryable(conn, tenant_id: str, incident_id: str, action_id: str) -> dict:
+    row = conn.execute("SELECT * FROM incident_action WHERE id=? AND incident_id=? AND tenant_id=?", (action_id, incident_id, tenant_id)).fetchone()
+    if row is None:
+        raise IncidentError("không tìm thấy lệnh của sự cố", 404)
+    if row["status"] not in RETRYABLE or row["superseded_by"]:
+        raise IncidentError("lệnh này không còn chờ xử lý", 409)
+    return dict(row)
+
+
+def retry(conn, tenant_id: str, incident_id: str, action_id: str, user: str) -> dict:
+    """Đưa lại lệnh đã hết hạn, bị từ chối hay chạy lỗi qua gateway dưới tên người bấm. Luôn tạo thẻ duyệt: người bấm nhờ đề xuất, chưa đồng ý chạy."""
+    from .. import gateway
+    old = _retryable(conn, tenant_id, incident_id, action_id)
+    inc = conn.execute("SELECT * FROM incident WHERE id=?", (incident_id,)).fetchone()
+    label = _label(old)
+    ctx = gateway.CallContext(tenant_id, user, inc["env"], f"Đề xuất lại lệnh cho sự cố: {inc['title']}", inc["episode_id"],
+                              intent=[f"Đề xuất lại lệnh {label} cho sự cố {inc['title']}"], escalate_on_block=True,
+                              roles=gateway.user_roles(conn, tenant_id, user), forced=[f"người dùng nhờ đề xuất lại lệnh {RETRYABLE[old['status']]}"])
+    step = gateway.invoke(conn, ctx, old["tool"], json.loads(old["args"]))
+    with db.tx(conn):
+        new = _insert(conn, tenant_id, incident_id, old["origin"], user, step, inc["episode_id"], old["why"])
+        if new["status"] in ("pending", "ok"):
+            _supersede(conn, old, new["id"])
+        if inc["status"] == "open" and inc["stage"] not in ("investigating", "verifying") and new["status"] in ("pending", "ok"):
+            stage = "verifying" if new["status"] == "ok" else "awaiting_approval"
+            conn.execute("UPDATE incident SET stage=?, verify_due=?, updated_at=? WHERE id=?",
+                         (stage, _later(settings(conn, tenant_id)["verify_minutes"] * 60) if stage == "verifying" else None, db.iso(), incident_id))
+    return new
+
+
+def dismiss(conn, tenant_id: str, incident_id: str, action_id: str) -> None:
+    """Người xem quyết định không cần lệnh này nữa: rời khỏi "Đang chờ". superseded_by='dismissed' thay cho id lệnh thay thế."""
+    _supersede(conn, _retryable(conn, tenant_id, incident_id, action_id), "dismissed")
+
+
+def _supersede(conn, old: dict, by: str) -> None:
+    """Đánh dấu cả các lần trước của cùng lệnh (cùng nhãn), để chúng không hiện lại ở "Đang chờ"."""
+    label = _label(old)
+    for r in conn.execute("SELECT * FROM incident_action WHERE incident_id=? AND superseded_by IS NULL AND status IN (%s)" % ",".join("?" * len(RETRYABLE)),
+                          (old["incident_id"], *RETRYABLE)).fetchall():
+        if _label(dict(r)) == label:
+            conn.execute("UPDATE incident_action SET superseded_by=? WHERE id=?", (by, r["id"]))
 
 
 def has_pending(conn, tenant_id: str) -> bool:

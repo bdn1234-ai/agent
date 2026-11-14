@@ -364,3 +364,62 @@ input.narrow { width: 70px; }
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--scroll); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
 :hover::-webkit-scrollbar-thumb { background-color: var(--scroll-hover); }
+
+/* Trang chi tiết sự cố: đầu trang, "Đang chờ", rồi hai cột (tóm tắt, dòng sự kiện | mốc thời gian, cảnh báo, nguyên nhân); hẹp thì một cột. */
+.ix { display: grid; gap: 14px; }
+.ix .card { margin: 0; min-width: 0; }
+.ix-head { border-left: 4px solid var(--line); display: grid; gap: 8px; }
+.ix-head.bad { border-left-color: var(--bad); } .ix-head.warn { border-left-color: var(--warn); } .ix-head.ok { border-left-color: var(--ok); } .ix-head.info { border-left-color: var(--accent); }
+.ix-head h1 { margin: 0; font-size: 20px; line-height: 1.3; overflow-wrap: anywhere; }
+.ix-top { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.ix-top > div:first-child { flex: 1 1 420px; min-width: 0; display: grid; gap: 6px; }
+.ix-top .row { margin-top: 0; }
+.ix-eyebrow { font-size: 12.5px; color: var(--muted); }
+.pill { display: inline-flex; align-items: center; padding: 2px 9px; border-radius: 999px; font-size: 12.5px; background: var(--code); color: var(--text); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pill.bad { background: var(--bad-bg); color: var(--bad); } .pill.warn { background: var(--warn-bg); color: var(--warn); }
+.pill.ok { background: var(--ok-bg); color: var(--ok); } .pill.info { background: var(--info-bg); color: var(--accent); }
+.ix-menu { position: relative; }
+.ix-pop { position: absolute; right: 0; top: calc(100% + 6px); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; width: min(320px, 80vw); display: grid; gap: 8px; z-index: 3; box-shadow: var(--shadow); }
+.ix-pop[hidden] { display: none; }
+.ix-pop select, .ix-pop input { width: 100%; }
+.ix-wait { border-color: var(--warn); background: color-mix(in srgb, var(--warn-bg) 55%, var(--panel)); display: grid; gap: 10px; }
+.ix-wait h2 { margin: 0; font-size: 17px; }
+.ix-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: start; padding-top: 10px; border-top: 1px solid var(--line); }
+.ix-item > div { min-width: 0; display: grid; gap: 3px; }
+.ix-item .row { margin-top: 4px; }
+.ix-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; background: var(--warn); }
+.ix-dot.bad { background: var(--bad); } .ix-dot.info { background: var(--accent); }
+.ix-acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.ix-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; align-items: start; }
+.ix-col { display: grid; gap: 14px; min-width: 0; }
+.ix-sec { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: space-between; }
+.ix-sec h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.ix-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.ix-tl { list-style: none; margin: 8px 0 0; padding: 0; display: grid; }
+.ix-day { font-size: 12.5px; font-weight: 700; color: var(--muted); padding: 12px 0 6px; }
+.ix-ev { display: grid; grid-template-columns: 48px 20px minmax(0, 1fr); gap: 0 10px; }
+.ix-ev time { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 2px; text-align: right; }
+.ix-mark { position: relative; display: flex; justify-content: center; }
+.ix-mark::before { content: ""; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--line); }
+.ix-mark span { position: relative; width: 12px; height: 12px; border-radius: 50%; margin-top: 5px; border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--line); background: var(--muted); }
+.ix-mark.alert span { background: var(--warn); } .ix-mark.clear span { background: var(--ok); } .ix-mark.agent span { background: var(--accent); }
+.ix-mark.human span { background: var(--text); } .ix-mark.fail span { background: var(--bad); }
+.ix-body { padding: 0 0 12px; min-width: 0; display: grid; gap: 2px; }
+.ix-who { font-size: 12px; font-weight: 600; color: var(--muted); }
+.ix-res { font-size: 13.5px; overflow-wrap: anywhere; }
+.ix-kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 14px; margin: 10px 0 0; }
+.ix-kv dt { color: var(--muted); } .ix-kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.ix-al { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 14px; padding: 3px 0; }
+.ix-al span:first-child { overflow-wrap: anywhere; }
+.ix-cause { display: grid; gap: 8px; font-size: 14px; }
+.ix-cause p { margin: 0; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
+.ix .incident-summary { margin: 0; }
+.ix details > summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.ix .incident-table { font-size: 13px; }
+@media (max-width: 900px) { .ix-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 640px) {
+  .ix-item { grid-template-columns: auto minmax(0, 1fr); } .ix-acts { grid-column: 2; justify-content: flex-start; }
+  .ix-pop { left: 0; right: auto; }
+  .ix-ev { grid-template-columns: 42px 16px minmax(0, 1fr); }
+  .ix .incident-table { display: block; overflow-x: auto; }
+}

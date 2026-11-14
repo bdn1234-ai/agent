@@ -268,7 +268,7 @@ class Reporting(llm.HeuristicProvider):
 
     def incident_report(self, data, tools):
         self.data, self.tools = data, tools
-        return {"title": "web CrashLoop sau deploy", "root_cause": "image lỗi", "confidence": self.confidence, "evidence": ["restartCount=12"],
+        return {"symptom": "web CrashLoop sau deploy", "root_cause": "image lỗi", "confidence": self.confidence, "evidence": ["restartCount=12"],
                 "actions": [a for a in self.actions if a["tool"] in tools]}
 
 
@@ -479,11 +479,13 @@ def test_approval_updates_incident_at_once_and_timeline_shows_fix(flow, users, i
     assert inc["stage"] == "verifying" and inc["actions"][0]["status"] == "ok" and "restarted" in inc["actions"][0]["result"]
     texts = [e["text"] for e in inc["timeline"]]
     ran = next(e for e in inc["timeline"] if e["kind"] == "ran")
-    assert ran["text"] == "chạy kubectl_write rollout restart deployment/web -n default (admin duyệt) → deployment.apps/web restarted"
+    assert (ran["who"], ran["text"]) == ("admin duyệt", "kubectl_write rollout restart deployment/web -n default → deployment.apps/web restarted")
     assert ran["action_id"] == inc["actions"][0]["id"] and ran["actor"] == inc["actions"][0]["decided_by"]
     proposed = next(e for e in inc["timeline"] if e["kind"] == "proposed")
-    assert proposed["actor"] == "kagent" and proposed["text"].startswith("kagent đề xuất kubectl_write rollout restart") and "→ cần duyệt" in proposed["text"]
-    assert any(t.startswith("nhận định: web CrashLoop") for t in texts) and not any("bắt đầu điều tra" in t for t in texts)
+    assert proposed["who"] == "kagent đề xuất" and proposed["text"].startswith("kubectl_write rollout restart") and "→ cần duyệt" in proposed["text"]
+    investigated = next(e for e in inc["timeline"] if e["kind"] == "investigated")
+    assert investigated["who"] == "kagent · điều tra lần 1" and investigated["text"] == "1 lệnh đọc → image lỗi (độ tin 0.60)"
+    assert not any("bắt đầu điều tra" in t for t in texts) and inc["cause"]["round"] == 1 and inc["cause"]["text"] == "image lỗi"
     infra.am_alerts[:] = infra.am_alerts[:1]
     with db.session() as conn:
         conn.execute("UPDATE incident SET verify_due=? WHERE id=?", (db.later(seconds=-1), iid))
@@ -507,10 +509,12 @@ def test_write_in_incident_chat_is_logged_and_denial_recorded(flow, users):
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["actions"] == []  # thẻ Hành động cũ chỉ hiện lệnh do điều tra đề xuất
     proposed = next(e for e in inc["timeline"] if e["kind"] == "proposed")
-    assert proposed["actor"] == uid and proposed["text"].startswith("alice yêu cầu kubectl_write rollout undo deployment/web -n default → cần duyệt")
+    assert proposed["who"] == "alice yêu cầu" and proposed["text"].startswith("kubectl_write rollout undo deployment/web -n default → cần duyệt")
+    item = flow.get(f"/api/incidents/{iid}").json()["waiting"][0]
+    assert item["kind"] == "approval" and item["approval_id"] == row["approval_id"] and item["requested_by"] == "alice"
     flow.post(f"/api/approvals/{row['approval_id']}/decide", json={"action": "deny", "reason": "chưa rollback, xem log trước"})
     denied = next(e for e in flow.get(f"/api/incidents/{iid}").json()["timeline"] if e["kind"] == "denied")
-    assert denied["text"] == "admin từ chối kubectl_write rollout undo deployment/web -n default: chưa rollback, xem log trước"
+    assert (denied["who"], denied["text"]) == ("admin từ chối", "kubectl_write rollout undo deployment/web -n default → từ chối: chưa rollback, xem log trước")
     assert denied["action_id"] == row["id"] and denied["actor"] != uid
 
 
@@ -525,7 +529,42 @@ def test_expired_approval_is_logged_and_hands_to_human(flow, users):
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["stage"] == "needs_human" and inc["actions"][0]["status"] == "expired"
     expired = next(e for e in inc["timeline"] if e["kind"] == "expired")
-    assert expired["text"] == "hết hạn duyệt, chưa chạy kubectl_write rollout restart deployment/web -n default" and expired["actor"] == "system"
+    assert expired["text"] == "kubectl_write rollout restart deployment/web -n default → hết hạn duyệt, chưa chạy" and expired["who"] == "hết hạn"
+
+
+def test_waiting_shows_expired_once_then_retry_and_dismiss(flow, users):
+    iid = _web_incident(users)
+    llm.set_provider(Reporting(0.6, [RESTART], verdict=False))
+
+    def expire():
+        with db.session() as conn:
+            conn.execute("UPDATE approval_request SET expires_at=? WHERE status='pending'", (db.later(seconds=-1),))
+            gateway.expire_approvals(conn, tenant(users))
+            incidents.follow_up(conn, tenant(users))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["state"]["label"] == "Chờ duyệt" and [w["kind"] for w in inc["waiting"]] == ["approval"]
+    assert inc["grouped_by"] == ["namespace=web"] and {g["alertname"]: g["firing"] for g in inc["alert_groups"]} == {"HighCPU": 1, "Down": 1}
+    assert inc["title"] == "web CrashLoop sau deploy" and inc["milestones"]["first_alert"] == "2026-11-12T08:00:00Z"
+    expire()
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)  # lượt hai đề xuất lại đúng lệnh đó, rồi cũng hết hạn
+    expire()
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    retry = [w for w in inc["waiting"] if w["kind"] == "retry"]
+    assert inc["state"]["label"] == "Cần người xử lý" and len(retry) == 1 and retry[0]["status"] == "expired"
+
+    out = flow.post(f"/api/incidents/{iid}/actions/{retry[0]['action_id']}/retry").json()
+    assert out["status"] == "pending" and "người dùng nhờ đề xuất lại lệnh đã hết hạn duyệt" in out["reasons"]
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["stage"] == "awaiting_approval" and [w["kind"] for w in inc["waiting"]] == ["approval"] and inc["waiting"][0]["requested_by"] == "admin"
+    assert flow.post(f"/api/incidents/{iid}/actions/{retry[0]['action_id']}/retry").status_code == 409
+
+    expire()
+    item = next(w for w in flow.get(f"/api/incidents/{iid}").json()["waiting"] if w["kind"] == "retry")
+    assert flow.post(f"/api/incidents/{iid}/actions/{item['action_id']}/dismiss").status_code == 200
+    assert not any(w["kind"] == "retry" for w in flow.get(f"/api/incidents/{iid}").json()["waiting"])
 
 
 def test_migration_copies_json_actions_with_original_times(flow, users):
@@ -548,10 +587,10 @@ def test_migration_copies_json_actions_with_original_times(flow, users):
     assert [(r["status"], r["auto"], r["verified"], r["proposed_at"]) for r in rows] == [
         ("ok", 1, 0, "2026-11-12T17:00:00+00:00"), ("expired", 0, None, "2026-11-13T09:48:07+00:00")]
     assert rows[0]["result_line"] == "deployment.apps/web restarted"
-    events = [(e["at"], e["kind"], e["text"]) for e in flow.get(f"/api/incidents/{iid}").json()["timeline"] if e.get("action_id")]
-    assert events == [("2026-11-12T17:00:00+00:00", "ran", "chạy kubectl_write rollout restart deployment/web -n default (tự động) → deployment.apps/web restarted"),
-                      ("2026-11-13T09:48:07+00:00", "proposed", "kagent đề xuất kubectl_write rollout undo deployment/web -n default → cần duyệt: tự xử lý đang tắt ở dev"),
-                      ("2026-11-13T10:18:07+00:00", "expired", "hết hạn duyệt, chưa chạy kubectl_write rollout undo deployment/web -n default")]
+    events = [(e["at"], e["who"], e["text"]) for e in flow.get(f"/api/incidents/{iid}").json()["timeline"] if e.get("action_id")]
+    assert events == [("2026-11-12T17:00:00+00:00", "tự động", "kubectl_write rollout restart deployment/web -n default → deployment.apps/web restarted"),
+                      ("2026-11-13T09:48:07+00:00", "kagent đề xuất", "kubectl_write rollout undo deployment/web -n default → cần duyệt: tự xử lý đang tắt ở dev"),
+                      ("2026-11-13T10:18:07+00:00", "hết hạn", "kubectl_write rollout undo deployment/web -n default → hết hạn duyệt, chưa chạy")]
 
 
 def test_investigation_lives_in_shared_conversation(flow, users):

@@ -5,7 +5,8 @@ import json
 
 from .. import db
 from . import actions
-from .common import STAGE_LABEL, IncidentError, _is_write, describe, _method_label, _running, _shown_stage
+from .common import BOT, STAGE_LABEL, IncidentError, _cmd, _worse, _is_write, _label, _method_label, _running, _shown_stage, describe, who
+from .config import settings
 from .grouping import merged_from
 from .investigate import queued
 from .summary import summary_view
@@ -48,10 +49,31 @@ def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
         out.append({"at": start, "kind": "alert", "actor": "alert", "text": f"{name} bắt đầu" + (f" ({len(group)} cảnh báo)" if len(group) > 1 else "")})
         if all(a["status"] == "resolved" for a in group):
             out.append({"at": max(a["resolved_at"] or "" for a in group), "kind": "alert_resolved", "actor": "alert", "text": f"{name} hết"})
-    for e in conn.execute("SELECT at, kind, text, actor, action_id FROM incident_event WHERE incident_id=? AND kind IN (%s) ORDER BY id"
+    rounds = 0
+    for e in conn.execute("SELECT at, kind, text, data, actor, action_id FROM incident_event WHERE incident_id=? AND kind IN (%s) ORDER BY id"
                           % ",".join("?" * len(SHOWN_EVENTS)), (inc["id"], *SHOWN_EVENTS)).fetchall():
-        out.append(dict(e))
+        e = dict(e)
+        e["data"] = json.loads(e["data"]) if e["data"] else {}
+        if e["kind"] == "investigated":
+            rounds += 1
+            e["data"].setdefault("round", rounds)  # sự kiện ghi trước khi có số lượt
+        out.append(e)
+    names: dict[str, str] = {}
+
+    def name(actor):
+        if actor not in names:
+            r = conn.execute("SELECT username FROM app_user WHERE id=?", (actor,)).fetchone() if actor else None
+            names[actor] = r["username"] if r else "người dùng"
+        return names[actor]
+    for e in out:
+        e["who"] = who(e, name)
+        e["cat"] = EVENT_CAT.get(e["kind"], "agent")
+        e.pop("data", None)
     return sorted(out, key=lambda e: e["at"] or "")
+
+
+EVENT_CAT = {"alert": "alert", "alert_resolved": "alert", "resolved": "alert", "reopened": "alert",
+             "proposed": "action", "ran": "action", "failed": "action", "denied": "action", "expired": "action", "verified": "action", "closed": "action"}
 
 
 def actions_by_episode(conn, incident_id: str, episodes: list[dict]) -> dict[str, list[dict]]:
@@ -121,4 +143,97 @@ def get(conn, tenant_id: str, incident_id: str) -> dict:
             d["investigation"] = ep["output"]
             d["steps"] = [{"tool": s["tool"], "args": s.get("args"), "status": s["status"], "untrusted": bool(s.get("untrusted"))}
                           for s in json.loads(ep["trace"]) if s["type"] == "tool_call"]
+    d["waiting"] = waiting(conn, d)
+    d["state"] = state_of(d)
+    d["milestones"] = {"first_alert": min((a["starts_at"] or a["first_seen"] for a in d["alerts"]), default=None), "received": d["created_at"],
+                       "resolved": d["resolved_at"], "last_alert": d["last_alert_at"]}
+    d["alert_groups"] = alert_groups(d["alerts"])
+    d["grouped_by"] = grouped_by(d["alerts"], settings(conn, tenant_id)["group_labels"])
+    d["cause"] = {"text": d["cause"] or d["root_cause"], "at": d["cause_at"], "round": d["investigations"], "confidence": d["confidence"],
+                  "evidence": d["evidence"], "steps": len(d["steps"])} if d["episode_id"] else None
     return d
+
+
+def _username(conn, user_id: str | None) -> str | None:
+    r = conn.execute("SELECT username FROM app_user WHERE id=?", (user_id,)).fetchone() if user_id else None
+    return r["username"] if r else None
+
+
+def waiting(conn, d: dict) -> list[dict]:
+    """Việc của sự cố đang chờ người: lệnh chờ duyệt; lệnh hết hạn, bị từ chối, chạy lỗi mà chưa có lệnh thay; điều tra lỗi; cần người xem."""
+    rows = actions.rows(conn, d["id"])
+    is_open = d["status"] == "open"
+    items, shown = [], set()
+    for i in range(len(rows) - 1, -1, -1):
+        row, label = rows[i], _label(rows[i])
+        base = {"action_id": row["id"], "label": label, "command": _cmd(row), "summary": describe(json.loads(row["args"] or "null")), "why": row["why"],
+                "reasons": json.loads(row["reasons"] or "[]"), "risk_tier": row["risk_tier"], "origin": row["origin"],
+                "requested_by": "kagent" if row["origin"] == "investigation" and row["requested_by"] == bot_id(conn) else _username(conn, row["requested_by"])}
+        if row["status"] == "pending" and row["approval_id"]:
+            req = conn.execute("SELECT status, expires_at FROM approval_request WHERE id=?", (row["approval_id"],)).fetchone()
+            if req and req["status"] == "pending":
+                items.append({**base, "kind": "approval", "approval_id": row["approval_id"], "expires_at": req["expires_at"],
+                              "dry_run": json.loads(row["dry_run"]) if row["dry_run"] else None})
+            continue
+        if not is_open or row["status"] not in actions.RETRYABLE or row["superseded_by"] or label in shown:
+            continue
+        shown.add(label)
+        if any(_label(r) == label and r["status"] in ("ok", "pending") for r in rows[i + 1:]):
+            continue  # đã có lần chạy hoặc đề xuất sau đó
+        items.append({**base, "kind": "retry", "status": row["status"], "at": row["ran_at"] or row["decided_at"], "result_line": row["result_line"],
+                      "deny_reason": row["deny_reason"], "decided_by": _username(conn, row["decided_by"])})
+    busy = d["investigating"] or d["stage"] == "investigating"
+    if is_open and not busy and d["stage"] == "error":
+        e = conn.execute("SELECT text FROM incident_event WHERE incident_id=? AND kind='error' ORDER BY id DESC LIMIT 1", (d["id"],)).fetchone()
+        items.append({"kind": "error", "text": e["text"] if e else "điều tra lỗi"})
+    elif is_open and not busy and not items and d["stage"] in ("reported", "needs_human"):
+        e = conn.execute("SELECT text FROM incident_event WHERE incident_id=? AND kind IN ('no_action','verified','stopped') ORDER BY id DESC LIMIT 1",
+                         (d["id"],)).fetchone()
+        items.append({"kind": "review", "text": e["text"] if e else "cần người xem nguyên nhân và xử lý"})
+    return items
+
+
+def bot_id(conn) -> str | None:
+    r = conn.execute("SELECT id FROM app_user WHERE username=?", (BOT,)).fetchone()
+    return r["id"] if r else None
+
+
+def state_of(d: dict) -> dict:
+    """Một trạng thái cho chip đầu trang, theo việc đang chờ chứ không chỉ theo stage."""
+    approvals = any(w["kind"] == "approval" for w in d["waiting"])
+    if d["status"] == "closed":
+        key, label = "closed", "Đã đóng"
+    elif d["investigating"] or d["stage"] == "investigating":
+        key, label = "investigating", "Đang điều tra"
+    elif approvals:
+        key, label = "awaiting_approval", "Chờ duyệt"
+    elif d["status"] == "resolved":
+        key, label = "cleared", "Đã hết"
+    elif d["stage"] == "verifying":
+        key, label = "verifying", "Đang xác minh"
+    elif d["stage"] == "handled":
+        key, label = "handled", "Đã xử lý"
+    elif d["stage"] == "new" and d["investigate_after"]:
+        key, label = "queued", "Chờ điều tra"
+    else:
+        key, label = "needs_human", "Cần người xử lý"
+    return {"key": key, "label": label}
+
+
+def alert_groups(alerts: list[dict]) -> list[dict]:
+    groups: dict[str, dict] = {}
+    for a in alerts:
+        g = groups.setdefault(a["alertname"] or "?", {"alertname": a["alertname"] or "?", "firing": 0, "resolved": 0, "severity": None})
+        g["firing" if a["status"] == "firing" else "resolved"] += 1
+        g["severity"] = _worse(g["severity"], a["severity"])
+    return sorted(groups.values(), key=lambda g: (-g["firing"], g["alertname"]))
+
+
+def grouped_by(alerts: list[dict], keys: list[str]) -> list[str]:
+    """Nhãn gom mà mọi cảnh báo của sự cố cùng có và cùng giá trị, vd. ["namespace=svc-document"]."""
+    out = []
+    for k in keys:
+        values = {str(a["labels"].get(k) or "") for a in alerts}
+        if len(values) == 1 and "" not in values:
+            out.append(f"{k}={values.pop()}")
+    return out
