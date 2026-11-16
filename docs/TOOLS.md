@@ -10,7 +10,7 @@ Agent chỉ dùng công cụ thật. Mỗi công cụ được tạo từ một 
 
 | Template | Công cụ (mức rủi ro) | Tham số chính |
 | --- | --- | --- |
-| `k8s` Kubernetes | kubectl_read R1, kubectl_write R3 (có chạy thử), kubectl_admin R4 (xem [Quyền Kubernetes](#quyền-kubernetes-và-công-cụ-kubectl)) | kubeconfig (+ context) hoặc api_url + token của tài khoản quản trị, ca_cert, namespace (mặc định của kubectl). Kubeconfig phải nhúng sẵn chứng chỉ (`kubectl config view --raw --minify --flatten`); dùng token hoặc chứng chỉ client, không hỗ trợ exec/auth-provider; api_url, token điền tay được ưu tiên hơn kubeconfig |
+| `k8s` Kubernetes | kubectl_read R1, kubectl_write R3 (có chạy thử), kubectl_admin R4 (xem [Quyền Kubernetes](#quyền-kubernetes-và-công-cụ-kubectl)); helm_read R1 (kèm helm diff, helm drift), helm_write R3 (chạy thử bằng helm diff), helm_admin R4 (xem [Helm](#helm)) | kubeconfig (+ context) hoặc api_url + token của tài khoản quản trị, ca_cert, namespace (mặc định của kubectl). Kubeconfig phải nhúng sẵn chứng chỉ (`kubectl config view --raw --minify --flatten`); dùng token hoặc chứng chỉ client, không hỗ trợ exec/auth-provider; api_url, token điền tay được ưu tiên hơn kubeconfig |
 | `grafana` | search_dashboards, list_datasources, prometheus_query, list_alerts (R0), create_silence R3 | url, token service account, default_datasource_uid |
 | `prometheus` (cả Mimir, Thanos, VictoriaMetrics) | query, query_range, list_alerts, list_rules, list_targets, label_values, metric_metadata (R0). query_range trả min/max/avg/last và vài điểm mẫu thay vì toàn bộ chuỗi | url, token hoặc username/password, tenant_header (X-Scope-OrgID) |
 | `alertmanager` | list_alerts (gom theo alertname, severity), list_silences (R0), create_silence R3, expire_silence R3 (cả hai có chạy thử) | url, token hoặc username/password, tenant_header |
@@ -108,6 +108,8 @@ Theo cách Google SRE (rollback là cách giảm thiệt hại chung, phải di�
 | --- | --- | --- |
 | `kubectl_write` | Chạy thử phía server với `-o json` để biết đúng đối tượng sẽ đổi, chụp bản hiện tại; hoàn tác = `replace` về bản chụp. Đối tượng vừa tạo: xoá đúng nó (cần nhóm quản trị đã áp dụng). `cordon`↔`uncordon`, `rollout pause`↔`resume`. `rollout restart`: không có gì cần hoàn tác. | `taint`, mọi thứ chạm Secret (kagent không lưu nội dung secret) |
 | `kubectl_admin` | `delete`: chụp manifest rồi mới xoá, hoàn tác = tạo lại. Pod có controller: không cần, controller tạo lại. PVC: đổi PV sang `Retain` trước khi xoá (xoá mềm), hoàn tác = gắn lại PV. | namespace, PV, node, CRD, Secret, `exec`, `run`, `drain` |
+| `helm_write` | `upgrade`, `rollback`: ghi revision đang chạy, hoàn tác = `helm rollback` về đúng revision đó. `install` (hoặc `upgrade --install` khi chưa có release): hoàn tác = `uninstall` đúng release vừa cài. Đã có revision mới sau lệnh thì coi là bị sửa, không tự đè. | `install --generate-name`; namespace do `--create-namespace` tạo không bị xoá |
+| `helm_admin` | Như `helm_write` với install/upgrade/rollback. | `uninstall` (xoá cả lịch sử revision), `test` |
 | Elasticsearch `delete_index` | Xoá mềm: đóng index thay vì xoá; mở lại để khôi phục. | index đang đóng |
 | PostgreSQL/MySQL `execute` | `DROP TABLE` → đổi tên sang bảng `_kagent_trash_*`. `DELETE`/`UPDATE`/`TRUNCATE` → sao lưu các dòng sang `_kagent_bak_*`, đếm đủ dòng rồi mới chạy (`UPDATE` cần khoá chính). `ADD COLUMN`, `CREATE TABLE/INDEX` → xoá đúng thứ vừa thêm. | `INSERT`, nhiều câu trong một lần gọi, quá `max_rows` dòng; pha thu gọn của migration (`DROP/RENAME/đổi kiểu cột`, `DROP INDEX/VIEW/SCHEMA`) luôn cần người duyệt |
 | Silence (Alertmanager, Grafana) | Tạo: gỡ đúng silence vừa tạo. Gỡ: tạo lại cùng matchers tới hạn cũ. | |
@@ -178,6 +180,28 @@ Cách chạy kubectl:
 - Mỗi lần chạy, kagent tạo kubeconfig tạm (quyền 600) trỏ thẳng vào IP đã được lớp mạng kiểm tra, kèm `tls-server-name` là tên máy gốc. Nhờ vậy vẫn chặn mạng nội bộ khi chưa được phép và chống DNS rebinding.
 - kubectl chạy với env sạch, `HOME` tạm, timeout 1-120 giây (mặc định 30).
 - Image cài kubectl từ `KUBECTL_URL` (build arg, mặc định dl.k8s.io). Mạng nội bộ không tải được thì đặt `KAGENT_KUBECTL_URL` trỏ mirror cho docker compose, hoặc cài kubectl vào PATH (biến `KAGENT_KUBECTL` để chỉ đường dẫn khác).
+
+## Helm
+
+Ba công cụ `helm_read`, `helm_write`, `helm_admin` chạy helm 3 cùng plugin [helm-diff](https://github.com/databus23/helm-diff) và [helm-drift](https://github.com/nikhilsbhat/helm-drift) trên cụm của kết nối Kubernetes.
+
+Helm lưu release trong Secret (`sh.helm.release.v1.*`) của namespace. Theo RBAC của kagent, chỉ nhóm quản trị được đọc Secret, nên **cả ba công cụ đều chạy bằng ServiceAccount nhóm quản trị** và cần nhóm này đã được áp dụng. RBAC vì thế không phân biệt được lệnh đọc với lệnh ghi; kagent tự phân lệnh theo nội dung:
+
+| Công cụ | Lệnh | Mức |
+| --- | --- | --- |
+| helm_read | `list`, `status`, `history`, `show chart/values/readme/crds/all`, `template`, `get notes/metadata`, `diff upgrade/rollback/revision/release`, `drift run/all`, `version` | R1 |
+| helm_write | thêm `install`, `upgrade` (kể cả `--install`), `rollback`. Chạy thử bằng `helm diff`, hoàn tác bằng `helm rollback` | R3 |
+| helm_admin | thêm `uninstall`, `test`, `get values/manifest/hooks/all`, `diff --show-secrets` (kết quả có thể chứa Secret) | R4 |
+
+- **helm diff** che giá trị Secret theo mặc định; `--show-secrets` chuyển lệnh sang helm_admin. Có `--detailed-exitcode` thì mã thoát 2 (có khác biệt) không tính là lỗi.
+- **helm drift** so release với trạng thái thật trong cụm để tìm chỗ bị sửa tay, ví dụ `drift run web -n app --from-release`. kagent tự thêm `--disable-error-on-drift`, vì có drift là kết quả chứ không phải lỗi, và `--no-color`.
+- **Chạy thử của helm_write** đổi lệnh thành `helm diff upgrade --allow-unreleased` hoặc `helm diff rollback`, bỏ các flag chỉ dành cho lệnh ghi (`--wait`, `--atomic`, `--timeout`...). Thiếu plugin helm-diff thì chạy `--dry-run=server` nhưng không hiện manifest, vì manifest có Secret ở dạng thường.
+- **Chart:** dùng `oci://...`, `https://.../chart.tgz` hoặc tên chart kèm `--repo https://...`. URL qua kiểm tra mạng như mọi đích khác, và tải chart qua proxy của kết nối (`NO_PROXY` giữ API server). Không có `helm repo add`, `registry login`, `plugin install`: mỗi lần chạy dùng `HOME`, cache và config tạm.
+- **Values:** truyền nội dung qua tham số `values` với `-f -`. kagent ghi ra file tạm, vì helm-drift không đọc values từ stdin.
+- **Chặn:** đọc file hoặc chạy chương trình trên máy chủ (`-f đường dẫn`, `--set-file`, `--post-renderer`, `--ca-file`, `--cert-file`, `--key-file`, `--keyring`, `--verify`, `--custom-diff`, `--temp-path`, `--output-dir`); đổi danh tính hay đích đến (`--kubeconfig`, mọi `--kube-*` trừ `--kube-version`); thông tin đăng nhập repo (`--username`, `--password`). Không dùng `--dry-run` trực tiếp, vì đã có bước chạy thử.
+- **Thời gian chạy:** lệnh đọc mặc định 60 giây, lệnh ghi 300 giây, tối đa 600. Lệnh ghi chưa có `--timeout` thì kagent tự thêm `--timeout` bằng đúng thời gian đó, để helm tự dừng chờ trước khi tiến trình bị giết, tránh release kẹt ở `pending-upgrade`.
+- **Kết quả tin cậy:** chỉ `list` và `version`. `status` có NOTES, `history` có mô tả, manifest do người viết chart ghi.
+- **Image:** cài helm từ `HELM_URL` (mặc định get.helm.sh v3.16.4), helm-diff từ `HELM_DIFF_URL`, helm-drift từ `HELM_DRIFT_URL` vào `/opt/helm/plugins`. Mạng nội bộ thì đặt `KAGENT_HELM_URL`, `KAGENT_HELM_DIFF_URL`, `KAGENT_HELM_DRIFT_URL` trỏ mirror. Đặt rỗng thì bỏ qua plugin đó; công cụ sẽ báo "chưa cài plugin" khi được gọi.
 
 ## OpenStack
 

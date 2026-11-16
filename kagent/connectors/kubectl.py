@@ -294,27 +294,31 @@ def _exec(argv: list[str], config: str, stdin: str | None, timeout: int, interru
         full = [exe or KUBECTL, f"--request-timeout={timeout}s", f"--cache-dir={os.path.join(d, 'cache')}", *argv]
         if runner is not None:
             return runner(full, env, stdin, timeout)
-        from .. import live
-        # Nhóm tiến trình riêng để giết được cả tiến trình con (plugin, credential helper) khi dừng hoặc hết giờ.
-        proc = subprocess.Popen(full, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=d, start_new_session=True)
-        deadline = time.monotonic() + timeout + 5
-        data = (stdin or "").encode()
-        while True:
-            try:
-                out, err = proc.communicate(input=data, timeout=0.25)
-                return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"), False
-            except subprocess.TimeoutExpired:
-                data = None  # đã gửi stdin ở lần gọi đầu
-                stopped = interruptible and live.stopping()
-                if stopped or time.monotonic() > deadline:
-                    try:
-                        os.killpg(proc.pid, 9)
-                    except ProcessLookupError:
-                        pass
-                    out, err = proc.communicate()
-                    if stopped:
-                        _fail("đã dừng theo yêu cầu")
-                    return -1, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"), True
+        return spawn(full, env, d, stdin, timeout + 5, interruptible)
+
+
+def spawn(full: list[str], env: dict, cwd: str, stdin: str | None, deadline_s: float, interruptible: bool) -> tuple[int, str, str, bool]:
+    from .. import live
+    # Nhóm tiến trình riêng để giết được cả tiến trình con (plugin, credential helper) khi dừng hoặc hết giờ.
+    proc = subprocess.Popen(full, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=cwd, start_new_session=True)
+    deadline = time.monotonic() + deadline_s
+    data = (stdin or "").encode()
+    while True:
+        try:
+            out, err = proc.communicate(input=data, timeout=0.25)
+            return proc.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"), False
+        except subprocess.TimeoutExpired:
+            data = None  # đã gửi stdin ở lần gọi đầu
+            stopped = interruptible and live.stopping()
+            if stopped or time.monotonic() > deadline:
+                try:
+                    os.killpg(proc.pid, 9)
+                except ProcessLookupError:
+                    pass
+                out, err = proc.communicate()
+                if stopped:
+                    _fail("đã dừng theo yêu cầu")
+                return -1, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"), True
 
 
 _KLOG = re.compile(r"^[EWI]\d{4} \d{2}:\d{2}:\d{2}\.\d+\s+\d+ \S+:\d+\] ")
