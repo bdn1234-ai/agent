@@ -60,8 +60,8 @@ function busy(text) {
 }
 
 const fmtTime = (s) => (s ? new Date(s).toLocaleString("vi-VN") : "—");
-const CLASS = { proposed: "warn", disabled: "bad", success: "ok", ok: "ok", active: "ok", auto: "ok", approved: "ok", published: "ok", failure: "bad", error: "bad", blocked: "bad", denied: "bad", rejected: "bad", deprecated: "bad", invalid: "bad", pending: "warn", candidate: "warn", pending_review: "warn", partial: "warn", expired: "warn" };
-const LABEL = { success: "thành công", failure: "thất bại", partial: "một phần", unknown: "chưa rõ", ok: "ok", error: "lỗi", blocked: "bị chặn", pending: "chờ duyệt", auto: "tự chạy", approved: "đã duyệt", denied: "từ chối", expired: "hết hạn", invalid: "sai tham số", candidate: "ứng viên", active: "hiệu lực", deprecated: "hết hiệu lực", rejected: "bị loại", pending_review: "chờ duyệt", proposed: "đề xuất", disabled: "đã tắt", published: "đã publish", noop: "không đổi", stale: "đã cũ", reverted: "đã hoàn tác" };
+const CLASS = { proposed: "warn", disabled: "bad", success: "ok", ok: "ok", active: "ok", auto: "ok", approved: "ok", published: "ok", failure: "bad", error: "bad", blocked: "bad", denied: "bad", rejected: "bad", deprecated: "bad", invalid: "bad", pending: "warn", candidate: "warn", pending_review: "warn", partial: "warn", expired: "warn", skipped: "warn" };
+const LABEL = { success: "thành công", failure: "thất bại", partial: "một phần", unknown: "chưa rõ", ok: "ok", error: "lỗi", blocked: "bị chặn", pending: "chờ duyệt", auto: "tự chạy", approved: "đã duyệt", denied: "từ chối", expired: "hết hạn", skipped: "bỏ qua", invalid: "sai tham số", candidate: "ứng viên", active: "hiệu lực", deprecated: "hết hiệu lực", rejected: "bị loại", pending_review: "chờ duyệt", proposed: "đề xuất", disabled: "đã tắt", published: "đã publish", noop: "không đổi", stale: "đã cũ", reverted: "đã hoàn tác" };
 const badge = (v) => h("span", { class: "badge " + (CLASS[v] || "") }, LABEL[v] || v);
 const isAdmin = () => state.me.is_org_admin || state.tenant.roles.includes("tenant_admin");
 
@@ -240,7 +240,7 @@ function episodeCard(ep, onDone) {
 // ---------- Sự cố: cảnh báo được gom, điều tra, xử lý tự động ----------
 const SEV_CLASS = { critical: "bad", error: "bad", high: "bad", warning: "warn", medium: "warn" };
 const STAGE_CLASS = { handled: "ok", verifying: "info", investigating: "info", awaiting_approval: "warn", reported: "warn", needs_human: "bad", error: "bad", cleared: "ok" };
-const STEP_STATUS = { ok: "đã chạy", dry_run_only: "chỉ chạy thử", pending: "chờ duyệt", approved: "đã duyệt", denied: "bị từ chối", expired: "hết hạn duyệt", blocked: "bị chặn", error: "lỗi", invalid: "sai tham số" };
+const STEP_STATUS = { ok: "đã chạy", dry_run_only: "chỉ chạy thử", pending: "chờ duyệt", approved: "đã duyệt", denied: "bị từ chối", expired: "hết hạn duyệt", skipped: "bị bỏ qua", blocked: "bị chặn", error: "lỗi", invalid: "sai tham số" };
 function ago(iso) {
   if (!iso) return "—";
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -315,7 +315,7 @@ function span(ms) {
 }
 const STATE_TONE = { needs_human: "bad", awaiting_approval: "warn", waiting_quota: "warn", investigating: "info", queued: "info", verifying: "info", handled: "ok", cleared: "ok", closed: "" };
 const EV_MARK = { alert: "alert", alert_resolved: "clear", resolved: "clear", reopened: "alert", investigated: "agent", no_action: "agent", proposed: "agent",
-  ran: "human", verified: "clear", closed: "human", quota: "alert", task_added: "human", task_done: "clear", task_reopened: "human", failed: "fail", denied: "fail", expired: "fail", error: "fail", stopped: "fail" };
+  ran: "human", verified: "clear", closed: "human", quota: "alert", task_added: "human", task_done: "clear", task_reopened: "human", failed: "fail", denied: "fail", expired: "fail", skipped: "human", error: "fail", stopped: "fail" };
 const EV_FILTERS = [["all", "Tất cả"], ["action", "Hành động"], ["agent", "Điều tra"], ["alert", "Cảnh báo"]];
 
 async function incidentDetail(main, id) {

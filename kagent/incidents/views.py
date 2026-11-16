@@ -48,7 +48,7 @@ def list_incidents(conn, tenant_id: str, status: str = "open", limit: int = 100)
 
 
 SHOWN_EVENTS = ("investigated", "verified", "resolved", "reopened", "closed", "no_action", "stopped", "error", "quota", "task_added", "task_done", "task_reopened",
-                "proposed", "ran", "failed", "denied", "expired")
+                "proposed", "ran", "failed", "denied", "expired", "skipped")
 
 
 def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
@@ -89,7 +89,7 @@ def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
 
 
 EVENT_CAT = {"alert": "alert", "alert_resolved": "alert", "resolved": "alert", "reopened": "alert",
-             "proposed": "action", "ran": "action", "failed": "action", "denied": "action", "expired": "action", "verified": "action", "closed": "action",
+             "proposed": "action", "ran": "action", "failed": "action", "denied": "action", "expired": "action", "skipped": "action", "verified": "action", "closed": "action",
              "task_added": "action", "task_done": "action", "task_reopened": "action"}
 
 
@@ -104,7 +104,6 @@ def actions_by_episode(conn, incident_id: str, episodes: list[dict]) -> dict[str
     ids = {e["id"] for e in episodes}
     out: dict[str, list[dict]] = {}
     rows = actions.rows(conn, incident_id)
-    pending = {w["action_id"] for w in waiting(conn, {**dict(inc), "investigating": incident_id in _running}) if w.get("action_id")}
     for a in [r for r in rows if r["origin"] == "investigation"]:
         ep = a["episode_id"]
         if ep is None and a["approval_id"]:
@@ -120,22 +119,9 @@ def actions_by_episode(conn, incident_id: str, episodes: list[dict]) -> dict[str
         except ValueError:
             result = a["result"]  # bị cắt 2000 ký tự nên không còn là JSON
         out.setdefault(ep, []).append({**{k: a[k] for k in ("tool", "args", "why", "status", "auto", "risk_tier", "reasons", "approval_id", "verified")},
-                                       "result": result, "summary": describe(a["args"]), "waiting": a["id"] in pending,
-                                       "settled": None if a["id"] in pending or a["status"] in ("ok", "pending") else _settled(a, rows, inc),
+                                       "result": result, "summary": describe(a["args"]),
                                        "action_class": "write" if _is_write(conn, inc["tenant_id"], a["tool"]) else "read"})
     return out
-
-
-def _settled(a: dict, rows: list[dict], inc) -> str:
-    """Vì sao lệnh hết hạn, bị từ chối hay chạy lỗi không còn chờ ai: để hội thoại cũ không còn mời đề xuất lại."""
-    label = _label(a)
-    if a["superseded_by"] == "dismissed":
-        return "đã bỏ qua"
-    if a["superseded_by"] or any(_label(r) == label and r["status"] in ("ok", "pending") and r["proposed_at"] > a["proposed_at"] for r in rows):
-        return "đã có lần chạy hoặc đề xuất sau"
-    if inc["status"] != "open":
-        return "sự cố đã hết" if inc["status"] == "resolved" else "sự cố đã đóng"
-    return "đã có lệnh tương tự ở lượt sau"
 
 
 def view(row: dict) -> dict:

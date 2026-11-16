@@ -251,7 +251,8 @@ function approvalCard(a, onDecide, streaming, context) {
   const failed = a.result && a.result.status === "error";
   if (done) {
     const icon_ = failed ? "✕" : a.status === "approved" ? "✓" : a.status === "denied" ? "✕" : "…";
-    const head = failed ? "Đã duyệt nhưng chạy lỗi" : a.status === "approved" ? "Đã duyệt và chạy" : a.status === "denied" ? "Bạn đã từ chối" : "Hết hạn, chưa ai duyệt";
+    const head = failed ? "Đã duyệt nhưng chạy lỗi" : a.status === "approved" ? "Đã duyệt và chạy" : a.status === "denied" ? "Bạn đã từ chối"
+      : a.status === "skipped" ? "Bỏ qua, chưa chạy" : "Hết hạn, chưa ai duyệt";
     const detail = h("div", { class: "tool-detail", hidden: "" }, commandView(a), result && resultView(result));
     const line = h("button", { type: "button", class: "tool-line" }, h("span", { class: "tool-icon s-" + (failed ? "error" : a.status) }, icon_),
       h("span", { class: "tool-name" }, head), summaryEl(a.why || argSummary(a.args)), icon("chevron"));
@@ -259,7 +260,8 @@ function approvalCard(a, onDecide, streaming, context) {
     return h("div", { class: `tool-row decided s-${failed ? "error" : a.status}` }, line,
       a.status === "denied" && h("div", { class: "tool-note" }, a.deny_reason ? "Ghi chú cho agent: " + a.deny_reason : "Không kèm ghi chú, agent dừng ở đây."),
       a.status === "expired" && h("div", { class: "tool-note" }, (a.reasons && a.reasons.length ? "Cần duyệt vì: " + a.reasons.join("; ").replace(/[.\s]+$/, "") + ". " : "")
-        + `Hết hạn lúc ${fmtTime(a.expires_at)}; thẻ hết hạn không duyệt được nữa, cần đề xuất lại.`),
+        + `Hết hạn lúc ${fmtTime(a.expires_at)}; thẻ hết hạn không duyệt được nữa, nhắn agent nếu vẫn cần lệnh này.`),
+      a.status === "skipped" && h("div", { class: "tool-note" }, "Hội thoại có tin nhắn mới trước khi lệnh được duyệt; agent sẽ đề xuất lại nếu vẫn cần."),
       a.note && h("div", { class: "tool-note" }, "Ghi chú cho agent: " + a.note), detail);
   }
   const dryError = a.dry_run && a.dry_run.error;
@@ -481,16 +483,12 @@ function chatView(main) {
         if (a.approval_id && byId.has(a.approval_id)) {
           const req = byId.get(a.approval_id);
           byId.delete(a.approval_id);
-          flow.append(h("div", { class: "incident-fix" }, approvalCard({ ...req, why: req.why || label }, decide),
-            req.status === "expired" && a.waiting && h("button", { type: "button", class: "ghost small-btn",
-              onclick: () => send(`Đề xuất lại lệnh khắc phục đã hết hạn duyệt: ${label || argSummary(a.args)}`) }, "Nhờ agent đề xuất lại"),
-            a.settled && h("div", { class: "small muted" }, `Không còn chờ: ${a.settled}.`)));
+          flow.append(h("div", { class: "incident-fix" }, approvalCard({ ...req, why: req.why || label }, decide)));
           continue;
         }
         flow.append(h("div", { class: "incident-fix" }, label && h("div", { class: "small" }, label), toolRow({ ...a, env: m.env }),
           a.status === "ok" && h("div", { class: "small muted" }, (a.auto ? "Tự chạy" : "Đã chạy")
-            + (a.verified === true ? " · đã hết cảnh báo" : a.verified === false ? " · cảnh báo vẫn còn" : "")),
-          a.settled && h("div", { class: "small muted" }, `Không còn chờ: ${a.settled}.`)));
+            + (a.verified === true ? " · đã hết cảnh báo" : a.verified === false ? " · cảnh báo vẫn còn" : ""))));
       }
     }
     for (const a of byId.values()) flow.append(approvalCard(a, decide));

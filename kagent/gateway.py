@@ -438,6 +438,24 @@ def expire_approvals(conn, tenant_id: str | None = None) -> int:
     return conn.execute(sql, args).rowcount
 
 
+def skip_pending(conn, tenant_id: str, conversation_id: str) -> list[str]:
+    """Như Claude Code: người dùng nhắn tiếp thay vì duyệt thì lệnh còn chờ của hội thoại bị bỏ qua, kể cả lệnh đã có một phần người duyệt.
+
+    Chỉ đề xuất của lượt mới nhất còn duyệt được; agent đọc lại lịch sử thấy lệnh bị bỏ qua và tự đề xuất lại khi vẫn cần.
+    """
+    with db.tx(conn):
+        ids = [r["id"] for r in conn.execute(
+            "SELECT a.id FROM approval_request a JOIN episode e ON e.id=a.episode_id "
+            "WHERE a.tenant_id=? AND e.conversation_id=? AND a.status='pending'", (tenant_id, conversation_id)).fetchall()]
+        if ids:
+            conn.execute(f"UPDATE approval_request SET status='skipped', decided_at=? WHERE id IN ({','.join('?' * len(ids))})", (db.iso(), *ids))
+    if ids:
+        from .incidents import actions
+        for approval_id in ids:
+            actions.on_approval(conn, tenant_id, approval_id)
+    return ids
+
+
 def decide(conn, tenant_id: str, approval_id: str, user_id: str, roles: set[str], is_org_admin: bool,
            action: str, reason: str | None = None) -> dict:
     """action: approve_once | approve_session | deny. Hết 30 phút không trả lời coi như từ chối.

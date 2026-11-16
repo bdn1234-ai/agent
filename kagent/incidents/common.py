@@ -131,6 +131,8 @@ def who(e: dict, name) -> str:
         return f"{name(actor)} từ chối"
     if kind == "expired":
         return "hết hạn"
+    if kind == "skipped":
+        return "bỏ qua"
     if kind == "quota":
         return "hết quota"
     if kind == "task_added":

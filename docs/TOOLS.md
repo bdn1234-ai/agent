@@ -101,6 +101,7 @@ Theo cách Claude Code hỏi và chờ người dùng.
   - Từ chối không kèm ghi chú thì lượt dừng.
   - Chạy kèm ghi chú thì agent nhận ghi chú cùng kết quả.
   - Ghi chú từ chối thành bài học (KU lesson). Ghi chú của cả hai loại được đưa vào ý người dùng cho auto mode.
+- **Nhắn tiếp thay vì duyệt thì lệnh cũ bị bỏ qua:** gửi tin nhắn mới trong hội thoại thì mọi lệnh còn chờ duyệt của các lượt trước chuyển sang `skipped`, kể cả lệnh prod đã có một trong hai người duyệt. Chỉ đề xuất của lượt mới nhất còn duyệt được. Agent thấy lệnh "bị bỏ qua" khi đọc lại lịch sử và tự đề xuất lại nếu yêu cầu mới vẫn cần. Bỏ qua không tính là ý của người dùng cho auto mode. Lượt chạy tiếp sau khi duyệt không bỏ qua gì. Lệnh của lượt mới nhất vẫn hết hạn sau 30 phút.
 - **Agent không được nói "đang chờ duyệt" khi lượt đó không có lệnh nào chờ.** Câu kết thúc nói vậy thì runner nhắc agent một lần, để agent gọi công cụ hoặc viết lại câu trả lời.
 - **`ask_user`:** agent hỏi 1–4 câu, mỗi câu 2–4 lựa chọn (lựa chọn khuyên dùng đứng đầu), giao diện tự thêm ô "Khác". Chỉ có một câu chọn một thì bấm là gửi luôn. Câu trả lời đi như tin nhắn của người dùng ở lượt sau. Gọi `ask_user` xong, các lệnh khác trong lượt bị chặn. Không có `ask_user` trong lượt điều tra sự cố.
 

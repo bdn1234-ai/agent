@@ -76,6 +76,8 @@ def _outcome_event(conn, row: dict) -> None:
         kind, actor, text = "denied", row["decided_by"], f"{label} → từ chối" + (f": {row['deny_reason']}" if row["deny_reason"] else "")
     elif status == "expired":
         kind, actor, text = "expired", "system", f"{label} → hết hạn duyệt, chưa chạy"
+    elif status == "skipped":
+        kind, actor, text = "skipped", "system", f"{label} → bỏ qua vì hội thoại có tin nhắn mới, chưa chạy"
     else:
         return
     if actor is None:
@@ -107,7 +109,7 @@ def _insert(conn, tenant_id: str, incident_id: str, origin: str, requested_by: s
     return row
 
 
-ACTION_EVENTS = ("proposed", "ran", "failed", "denied", "expired")
+ACTION_EVENTS = ("proposed", "ran", "failed", "denied", "expired", "skipped")
 
 
 def rebuild_events(conn) -> None:
@@ -125,7 +127,7 @@ def _settle(conn, row: dict, req) -> dict | None:
     result = json.loads(req["result"]) if req["result"] else {}
     decided = json.loads(req["decided_by"] or "[]")
     status = result.get("status", "ok") if req["status"] == "approved" else req["status"]
-    return {**row, "status": status, "decided_by": decided[-1] if decided else None, "decided_at": req["decided_at"],
+    return {**row, "status": status, "decided_by": decided[-1] if decided and status != "skipped" else None, "decided_at": req["decided_at"],
             "deny_reason": req["deny_reason"], "ran_at": req["decided_at"] if status in DONE else None,
             "result": _dump(result.get("result")) if result.get("result") is not None else row["result"],
             "result_line": result_line(result.get("result")) if status in DONE else None}

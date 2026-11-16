@@ -581,6 +581,8 @@ def chat(body: ChatBody, t: Tenant = Depends(current_tenant), conn=Depends(get_c
                      (conversation_id, t.tenant_id, t.user_id, title, now, now))
     run_id = db.new_id()
     run = live.start(conversation_id, run_id, message, continuation=bool(continuation_of), owner=t.user_id)
+    if body.conversation_id and not continuation_of:
+        gateway.skip_pending(conn, t.tenant_id, conversation_id)
     cancelled = run.stop
     with _runs_lock:
         _runs[run_id] = (t.tenant_id, t.user_id, cancelled, conversation_id)

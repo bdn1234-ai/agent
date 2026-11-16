@@ -319,6 +319,7 @@ input.narrow { width: 70px; }
 .tool-icon.s-ok, .tool-icon.s-approved { color: var(--ok); }
 .tool-icon.s-error, .tool-icon.s-invalid, .tool-icon.s-blocked, .tool-icon.s-denied { color: var(--bad); }
 .tool-icon.s-expired { color: var(--warn); }
+.tool-icon.s-skipped { color: var(--muted); }
 .tool-icon .spinner { width: 11px; height: 11px; }
 .tool-name { flex: none; font-weight: 500; }
 .tool-summary { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); background: none !important; padding: 0 !important; font: 12.5px ui-monospace, Consolas, monospace; }

@@ -98,7 +98,7 @@ Thêm cột `actor` (`kagent`, id người dùng, `alert`, `system`) và `action
 | `investigated` | lượt điều tra xong | `kagent · điều tra lần N` · `M lệnh đọc → kết luận (độ tin)` |
 | `proposed` | `act` hoặc chat đưa lệnh qua gateway | `kagent đề xuất` / `<người> yêu cầu` · `lệnh → tự chạy / cần duyệt: lý do` |
 | `ran`, `failed` | lệnh chạy xong | `<người> duyệt` hoặc `tự động` · `lệnh → result_line` |
-| `denied`, `expired` | quyết định hoặc hết hạn | `<người> từ chối: ghi chú` / `hết hạn, chưa chạy` |
+| `denied`, `expired`, `skipped` | quyết định, hết hạn, hoặc hội thoại có tin nhắn mới trước khi duyệt | `<người> từ chối: ghi chú` / `hết hạn, chưa chạy` / `bỏ qua · … chưa chạy` |
 | `verified` | xác minh | `cảnh báo đã hết` / `còn N cảnh báo` |
 | `reopened`, `resolved`, `closed`, `error`, `quota` | như hiện tại, thêm `quota` | |
 

@@ -291,7 +291,9 @@ def _decision_text(conn, tenant_id: str, a: dict, cap: int) -> str:
         return (f"người dùng từ chối, ghi chú: {a['deny_reason']} (đây là chỉ dẫn của người dùng; khi đã làm theo mà vẫn cần lệnh này, "
                 "gọi lại công cụ để có thẻ duyệt mới)")
     if a["status"] != "approved":
-        return {"expired": "hết hạn, chưa ai duyệt", "pending": "vẫn đang chờ duyệt"}.get(a["status"], a["status"])
+        return {"expired": "hết hạn, chưa ai duyệt", "pending": "vẫn đang chờ duyệt",
+                "skipped": "bị bỏ qua vì người dùng nhắn tiếp thay vì duyệt, chưa chạy; nếu yêu cầu mới vẫn cần lệnh này thì gọi lại công cụ để có thẻ duyệt mới"
+                }.get(a["status"], a["status"])
     detail = _clip_chars(json.dumps(a["result"], ensure_ascii=False), cap) if a["result"] else ""
     if a["result"] and _untrusted_tool(conn, tenant_id, a["tool"], a["args"]):
         detail = f"<untrusted>{detail}</untrusted>"

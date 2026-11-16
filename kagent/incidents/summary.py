@@ -65,7 +65,7 @@ def due_summaries(conn, tenant_id: str) -> list[tuple[str, str]]:
     return out
 
 
-ACTION_STATUS = {"ok": "đã chạy", "pending": "đang chờ duyệt", "expired": "hết hạn duyệt, chưa chạy", "denied": "bị từ chối, chưa chạy",
+ACTION_STATUS = {"ok": "đã chạy", "pending": "đang chờ duyệt", "expired": "hết hạn duyệt, chưa chạy", "denied": "bị từ chối, chưa chạy", "skipped": "bị bỏ qua, chưa chạy",
                  "error": "chạy lỗi", "blocked": "bị chặn, chưa chạy", "invalid": "sai tham số, chưa chạy"}
 
 

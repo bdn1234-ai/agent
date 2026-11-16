@@ -43,7 +43,7 @@ def test_session_grant_runs_other_pending_reads_of_same_tool(users):
     alice = users["alice"]
     cid = _conversation(alice)
     _, first = _pending_search(alice, cid)
-    _, second = _pending_search(alice, cid)
+    _, second = _pending_search(alice, _conversation(alice))  # cùng hội thoại thì tin nhắn thứ hai đã bỏ qua lệnh đầu
     r = alice.post(f"/api/approvals/{first['approval_id']}/decide", json={"action": "approve_session"}).json()
     assert r["also_approved"] == [second["approval_id"]]
     sibling = next(a for a in alice.get("/api/approvals").json() if a["id"] == second["approval_id"])
@@ -73,6 +73,36 @@ def test_continue_rejects_old_turn_and_turn_without_approvals(users):
     assert r.status_code == 409 and "đã được duyệt" in r.text
     chat(alice, "xem pod", cid)
     assert alice.post("/api/chat", json={"continue_episode": first["id"], "conversation_id": cid}).status_code == 409
+
+
+def test_new_message_skips_pending_of_earlier_turns_like_claude_code(users):
+    alice = users["alice"]
+    cid = _conversation(alice)
+    message, step = _pending_search(alice, cid)
+    _, partial = _pending_search(alice, other := _conversation(alice))
+    _, elsewhere = _pending_search(alice, _conversation(alice))
+    with db.session() as conn:  # lệnh prod đã có một trong hai người duyệt vẫn bị bỏ qua
+        conn.execute("UPDATE approval_request SET required_approvals=2, decided_by='[\"x\"]' WHERE id=?", (partial["approval_id"],))
+    done(chat(alice, "thôi, xem pod thôi", cid, env=ENV))
+    done(chat(alice, "xem pod", other, env=ENV))
+    status = {a["id"]: a["status"] for a in alice.get("/api/approvals").json()}
+    assert status[step["approval_id"]] == status[partial["approval_id"]] == "skipped" and status[elsewhere["approval_id"]] == "pending"
+    r = alice.post(f"/api/approvals/{step['approval_id']}/decide", json={"action": "approve_once"})
+    assert r.status_code == 409
+    with db.session() as conn:
+        history = agent.load_history(conn, alice.tenant, cid)
+    assert any("bị bỏ qua vì người dùng nhắn tiếp" in m["content"] for m in history["messages"] if isinstance(m.get("content"), str))
+    assert not any("logs.search_logs" in i for i in history["intent"])  # bỏ qua không phải ý duyệt hay từ chối của người dùng
+    card = next(m for m in alice.get(f"/api/conversations/{cid}").json()["messages"] if m["id"] == message["id"])["approvals"][0]
+    assert card["status"] == "skipped"
+
+
+def test_continuation_keeps_pending_of_latest_turn(users):
+    alice = users["alice"]
+    cid = _conversation(alice)
+    message, step = _pending_search(alice, cid)
+    assert alice.post("/api/chat", json={"continue_episode": message["id"], "conversation_id": cid}).status_code == 409
+    assert next(a for a in alice.get("/api/approvals").json() if a["id"] == step["approval_id"])["status"] == "pending"
 
 
 def chat_continue(user, cid, episode_id):

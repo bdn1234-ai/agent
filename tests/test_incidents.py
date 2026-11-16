@@ -899,7 +899,7 @@ def test_summary_tasks_marked_done_and_incident_state_reaches_chat_context(flow,
     assert "Tóm tắt: tóm tắt lần 3" in seen["turn"] and "<incident" not in seen["system"]  # system prompt không đổi theo sự cố
 
 
-def test_old_expired_proposal_in_chat_settles_once_rerun_and_chat_fix_triggers_verify(flow, users):
+def test_chat_fix_in_incident_conversation_triggers_verify(flow, users):
     from test_approval_flow import Scripted
     iid = _web_incident(users)
     llm.set_provider(Reporting(0.6, [RESTART], verdict=False))
@@ -908,18 +908,8 @@ def test_old_expired_proposal_in_chat_settles_once_rerun_and_chat_fix_triggers_v
         conn.execute("UPDATE approval_request SET expires_at=?", (db.later(seconds=-1),))
         gateway.expire_approvals(conn, tenant(users))
         incidents.follow_up(conn, tenant(users))
-    cid = flow.get(f"/api/incidents/{iid}").json()["conversation_id"]
-    fix = flow.get(f"/api/conversations/{cid}").json()["messages"][0]["incident_actions"][0]
-    assert fix["status"] == "expired" and fix["waiting"] and fix["settled"] is None
-
-    action_id = next(w["action_id"] for w in flow.get(f"/api/incidents/{iid}").json()["waiting"] if w["kind"] == "retry")
-    req = flow.post(f"/api/incidents/{iid}/actions/{action_id}/retry").json()
-    flow.post(f"/api/approvals/{req['approval_id']}/decide", json={"action": "approve_once"})
-    fix = flow.get(f"/api/conversations/{cid}").json()["messages"][0]["incident_actions"][0]
-    assert not fix["waiting"] and fix["settled"] == "đã có lần chạy hoặc đề xuất sau"
-
-    with db.session() as conn:
         conn.execute("UPDATE incident SET stage='needs_human', verify_due=NULL WHERE id=?", (iid,))
+    cid = flow.get(f"/api/incidents/{iid}").json()["conversation_id"]
     llm.set_provider(Scripted(lambda call_tool: call_tool("k8s.kubectl_write", {"command": "rollout restart deployment/web -n default"})["status"]))
     with db.session() as conn:
         uid = conn.execute("SELECT id FROM app_user WHERE username='alice'").fetchone()["id"]
@@ -928,3 +918,20 @@ def test_old_expired_proposal_in_chat_settles_once_rerun_and_chat_fix_triggers_v
     flow.post(f"/api/approvals/{approval}/decide", json={"action": "approve_once"})
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["stage"] == "verifying" and inc["verify_due"]  # sửa trong chat xong thì kagent xác minh cảnh báo đã hết chưa
+
+
+def test_new_message_in_incident_conversation_skips_proposed_fix(flow, users):
+    from test_chat import chat, done
+    iid = _web_incident(users)
+    llm.set_provider(Reporting(0.6, [RESTART], verdict=False))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["stage"] == "awaiting_approval" and [w["kind"] for w in inc["waiting"]] == ["approval"]
+    llm.set_provider(None)
+    done(chat(flow, "khoan, xem log trước đã", inc["conversation_id"]))
+    inc = flow.get(f"/api/incidents/{iid}").json()
+    assert inc["stage"] == "needs_human" and not any(w["kind"] in ("approval", "retry") for w in inc["waiting"])
+    assert any(e["kind"] == "skipped" and "bỏ qua" in e["text"] for e in inc["timeline"])
+    fix = flow.get(f"/api/conversations/{inc['conversation_id']}").json()["messages"][0]["incident_actions"][0]
+    assert fix["status"] == "skipped"

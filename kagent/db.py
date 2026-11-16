@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS approval_request (
   requester_id TEXT NOT NULL, original_request TEXT NOT NULL,
   tool TEXT NOT NULL, env TEXT NOT NULL, args TEXT NOT NULL, dry_run TEXT,
   risk_tier TEXT NOT NULL, confidence REAL NOT NULL, reasons TEXT NOT NULL, rollback_hint TEXT,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied','expired')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied','expired','skipped')),
   required_approvals INTEGER NOT NULL DEFAULT 1, decided_by TEXT NOT NULL DEFAULT '[]',
   deny_reason TEXT, result TEXT, learned INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL, expires_at TEXT NOT NULL, decided_at TEXT
@@ -337,6 +337,15 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE llm_call SET cache_known=0 WHERE cache_read=0 AND cache_write=0 AND coalesce(model,'') NOT LIKE 'claude%'")
     if "grant_policy" not in {r["name"] for r in conn.execute("PRAGMA table_info(tenant)")}:
         conn.execute("ALTER TABLE tenant ADD COLUMN grant_policy TEXT NOT NULL DEFAULT '{}'")
+    approval_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='approval_request'").fetchone()["sql"]
+    if "'skipped'" not in approval_sql:
+        # SQLite không sửa được CHECK: dựng lại bảng từ chính câu CREATE hiện có để giữ các cột đã ALTER thêm.
+        with tx(conn):
+            conn.execute(approval_sql.replace("'expired')", "'expired','skipped')").replace("approval_request", "approval_request_new", 1))
+            conn.execute("INSERT INTO approval_request_new SELECT * FROM approval_request")
+            conn.execute("DROP TABLE approval_request")
+            conn.execute("ALTER TABLE approval_request_new RENAME TO approval_request")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_approval ON approval_request(tenant_id, status)")
     approval_cols = {r["name"] for r in conn.execute("PRAGMA table_info(approval_request)")}
     if "why" not in approval_cols:
         conn.execute("ALTER TABLE approval_request ADD COLUMN why TEXT")  # câu agent tự mô tả lệnh, chỉ để hiện trên thẻ duyệt
