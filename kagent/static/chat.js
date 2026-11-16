@@ -179,6 +179,7 @@ function toolRow(step) {
   const row = h("div", { class: `tool-row ${kind} s-${status}` }, line,
     stopped && step.reasons && step.reasons.length > 0 && h("div", { class: "tool-note" }, step.reasons.join("; ")),
     status === "error" && step.result && step.result.error && h("div", { class: "tool-note" }, String(step.result.error).split("\n")[0].slice(0, 300)),
+    step.change_id && changeLine({ id: step.change_id, status: "loading" }),
     detail);
   let filled = false;
   line.addEventListener("click", () => {
@@ -188,6 +189,7 @@ function toolRow(step) {
       appendKids(detail, [h("div", { class: "small muted" }, `${step.tool} · ${step.env || ""}${step.risk_tier ? " · " + step.risk_tier : ""}${step.parallel ? " · chạy song song" : ""}`),
         h("pre", { class: "tool-args" }, JSON.stringify(step.args, null, 1)),
         !stopped && step.reasons && step.reasons.length > 0 && h("div", { class: "small muted" }, step.reasons.join("; ")),
+        step.status === "ok" && step.undo && step.undo.checks.length > 0 && undoChecks(step.undo, "Vì sao tự chạy"),
         step.steps && h("div", { class: "sub-steps" }, step.steps.map((sub) => h("div", { class: "small" }, "↳ ", h("code", {}, sub.tool), " ", badge(sub.status)))),
         resultView(step.result)]);
     }
@@ -262,18 +264,20 @@ function approvalCard(a, onDecide, streaming, context) {
       a.status === "expired" && h("div", { class: "tool-note" }, (a.reasons && a.reasons.length ? "Cần duyệt vì: " + a.reasons.join("; ").replace(/[.\s]+$/, "") + ". " : "")
         + `Hết hạn lúc ${fmtTime(a.expires_at)}; thẻ hết hạn không duyệt được nữa, nhắn agent nếu vẫn cần lệnh này.`),
       a.status === "skipped" && h("div", { class: "tool-note" }, "Hội thoại có tin nhắn mới trước khi lệnh được duyệt; agent sẽ đề xuất lại nếu vẫn cần."),
-      a.note && h("div", { class: "tool-note" }, "Ghi chú cho agent: " + a.note), detail);
+      a.note && h("div", { class: "tool-note" }, "Ghi chú cho agent: " + a.note),
+      a.change && changeLine(a.change), detail);
   }
   const dryError = a.dry_run && a.dry_run.error;
   const details = h("details", { class: "approval-more", open: dryError ? "" : null }, h("summary", { class: "small muted" }, dryError ? "Chạy thử báo lỗi" : "Chi tiết"),
     h("div", { class: "small muted" }, `${a.tool} · ${a.env} · ${a.risk_tier}`),
     a.reasons.length > 0 && h("div", { class: "small" }, "Cần duyệt vì: " + a.reasons.join("; ")),
     a.dry_run && h("div", { class: "small" + (dryError ? " warn-text" : "") }, (dryError ? "Lệnh nhiều khả năng sẽ thất bại: " : "Chạy thử: ") + (dryError || JSON.stringify(a.dry_run))),
-    a.rollback_hint && h("div", { class: "small" }, "Cách hoàn tác: " + a.rollback_hint));
+    !a.undo && a.rollback_hint && h("div", { class: "small" }, "Cách hoàn tác: " + a.rollback_hint));
   const decidable = !streaming && a.can_decide && onDecide;
   const card = h("div", { class: "approval" + (decidable ? " waiting" : ""), tabindex: decidable ? "0" : null, "data-approval": a.id, "aria-label": "Lệnh chờ duyệt: " + (a.why || a.tool) },
     h("div", { class: "approval-head" }, h("strong", {}, a.why || `Agent muốn chạy ${shortTool(a.tool)}`), h("span", { class: "badge " + (a.risk_tier >= "R3" ? "bad" : "warn") }, a.risk_tier)),
     context, commandView(a),
+    a.undo && undoChecks(a.undo, a.undo.soft ? "Xoá mềm" : "Hoàn tác"),
     streaming ? h("div", { class: "small muted" }, "Nút duyệt sẽ hiện khi agent trả lời xong.")
       : decidable ? approvalActions(a, onDecide)
       : h("div", { class: "small" }, `Đã có ${a.decided_by.length}/${a.required_approvals} người duyệt. Đang chờ người có quyền duyệt.`),
@@ -287,6 +291,70 @@ function approvalCard(a, onDecide, streaming, context) {
     });
   }
   return card;
+}
+
+// Điều kiện hoàn tác gateway đã xét: ✓ đạt, ✕ chưa đạt. Trên thẻ duyệt cho biết thiếu gì; trên lệnh đã tự chạy cho biết vì sao được chạy.
+function undoChecks(u, title) {
+  const list = u.checks && u.checks.length ? u.checks : [{ ok: u.reversible, text: (u.reversible ? "Hoàn tác được: " : "Không hoàn tác được: ") + (u.summary || "") }];
+  return h("div", { class: "undo-checks" }, h("div", { class: "small muted" }, title),
+    list.map((c) => h("div", { class: "undo-check " + (c.ok ? "ok-text" : "warn-text") }, h("span", { "aria-hidden": "true" }, c.ok ? "✓ " : "✕ "),
+      h("span", { class: "sr-only" }, c.ok ? "đạt: " : "chưa đạt: "), c.text)));
+}
+
+const CHANGE_FINAL = ["ok", "reverted", "purged", "applied", "check_failed", "conflict", "revert_failed"];
+
+// Trạng thái của lệnh ghi sau khi chạy: đang kiểm tra, ổn, tự hoàn tác, kiểm tra không đạt; kèm nút Hoàn tác.
+// Đang kiểm tra thì hỏi lại máy chủ mỗi 10 giây cho tới khi có kết quả hoặc dòng bị gỡ khỏi trang.
+function changeLine(change) {
+  const box = h("div", { class: "change-line", role: "status" });
+  let cur = change;
+  const paint = () => {
+    const c = cur;
+    if (c.status === "loading") { box.replaceChildren(h("span", { class: "small muted" }, "…")); return; }
+    const check = c.check || {};
+    const left = c.verify_until ? Math.max(0, Math.ceil((new Date(c.verify_until) - Date.now()) / 60000)) : 0;
+    const by = c.reverted_by === "auto" ? "tự hoàn tác" : c.reverted_by === "drill" ? "hoàn tác khi diễn tập" : `${c.reverted_by || ""} hoàn tác`;
+    const [mark, cls, text] = {
+      verifying: ["◷", "muted", `Đang kiểm tra · còn ${left} phút` + (check.detail ? ` · ${check.detail}` : "")],
+      ok: ["✓", "ok-text", "Ổn sau kiểm tra" + (check.detail ? ` · ${check.detail}` : "")],
+      applied: c.soft ? ["🗑", "muted", `Xoá mềm · khôi phục được tới ${c.purge_at ? fmtTime(c.purge_at) : "—"}`] : ["✓", "muted", "Đã chạy · " + (c.summary ? "hoàn tác: " + c.summary : "")],
+      check_failed: ["⚠", "warn-text", "Kiểm tra không đạt: " + (check.detail || "")],
+      conflict: ["⚠", "warn-text", "Kiểm tra không đạt, không tự hoàn tác được: đối tượng đã bị sửa sau lệnh"],
+      reverted: ["↺", "muted", `Đã ${by}${c.reverted_at ? " lúc " + fmtTime(c.reverted_at) : ""}` + (c.reverted_by === "auto" && check.detail ? ` vì ${check.detail}` : "")],
+      revert_failed: ["✕", "warn-text", "Hoàn tác lỗi: " + ((c.revert && c.revert.error) || "")],
+      purged: ["✕", "muted", "Đã xoá thật"],
+    }[c.status] || ["•", "muted", c.status];
+    const btn = c.can_undo && c.can_revert !== false && h("button", { type: "button", class: "ghost small-btn" },
+      c.status === "conflict" ? "Hoàn tác…" : c.soft ? "Khôi phục" : "Hoàn tác");
+    if (btn) btn.addEventListener("click", guard(async () => { await runUndo(c, box, (next) => { cur = next; paint(); }); }));
+    box.replaceChildren(h("span", { class: cls }, h("span", { "aria-hidden": "true" }, mark + " "), text), btn || null);
+  };
+  const poll = async () => {
+    try {
+      const [fresh] = await api("GET", `/api/changes?ids=${encodeURIComponent(change.id)}`);
+      if (fresh) { cur = fresh; paint(); }
+    } catch { /* lỗi mạng tạm thời: thử lại ở nhịp sau */ }
+    if (box.isConnected && !CHANGE_FINAL.includes(cur.status)) setTimeout(poll, 10000);
+  };
+  paint();
+  if (!CHANGE_FINAL.includes(cur.status)) setTimeout(poll, cur.status === "loading" ? 0 : 10000);
+  return box;
+}
+
+// Hoàn tác: đối tượng đã bị sửa sau lệnh thì máy chủ trả danh sách khác biệt; người dùng đọc rồi mới chọn đè.
+async function runUndo(c, box, done) {
+  try {
+    done(await api("POST", `/api/changes/${c.id}/undo`, {}));
+    toast(c.soft ? "Đã khôi phục" : "Đã hoàn tác");
+  } catch (err) {
+    if (err.status !== 409 || !err.data || !err.data.drift) throw err;
+    const confirm = h("div", { class: "undo-drift warn-text" }, h("div", {}, "Đối tượng đã bị sửa sau lệnh; hoàn tác lúc này sẽ đè lên các thay đổi:"),
+      h("ul", {}, err.data.drift.map((d) => h("li", {}, d))),
+      h("div", { class: "row" },
+        h("button", { type: "button", class: "danger small-btn", onclick: guard(async () => { done(await api("POST", `/api/changes/${c.id}/undo`, { force: true })); toast("Đã hoàn tác"); }) }, "Vẫn hoàn tác"),
+        h("button", { type: "button", class: "ghost small-btn", onclick: () => confirm.remove() }, "Thôi")));
+    box.after(confirm);
+  }
 }
 
 function approvalActions(a, onDecide) {

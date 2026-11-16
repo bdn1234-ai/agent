@@ -55,6 +55,7 @@ tools:
     data_sensitivity: internal
     untrusted_output: true
     rollback_hint: "Gọi action ngược (os-start sau os-stop, revertResize sau resize), hoặc PUT lại giá trị cũ đã đọc trước khi sửa"
+    undo: openstack_undo
     input_schema:
       properties:
         service: {type: string}

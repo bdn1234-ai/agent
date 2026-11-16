@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import agent as agent_mod
-from . import automode, compiler, connections, db, entities, gateway, incidents, knowledge, learned, learning, llm, net, proxy, tools, vault
+from . import automode, compiler, connections, db, entities, gateway, incidents, knowledge, learned, learning, llm, net, proxy, tools, undo, vault
 from . import live
 from .connectors import k8s_rbac
 from .connectors.base import ConnectorError
@@ -658,6 +658,10 @@ def _approval_views(conn, t: "Tenant", rows: list[dict]) -> list[dict]:
     for a in rows:
         a["can_decide"] = gateway.can_decide(a, t.user_id, t.roles, t.principal.is_org_admin, self_ok)
         a["mine"] = a.get("requester_id", t.user_id) == t.user_id
+        if isinstance(a.get("undo"), str):
+            a["undo"] = json.loads(a["undo"])
+        change = conn.execute("SELECT * FROM change_record WHERE approval_id=? AND tenant_id=?", (a["id"], t.tenant_id)).fetchone()
+        a["change"] = undo.view(conn, dict(change)) if change else None
     return rows
 
 
@@ -681,7 +685,7 @@ def _chat_message(conn, t: "Tenant", ep: dict) -> dict:
     tenant_id = t.tenant_id
     approvals = db.rows(conn.execute(
         "SELECT a.id, a.tool, a.env, a.args, a.dry_run, a.risk_tier, a.confidence, a.reasons, a.rollback_hint, a.status, a.required_approvals, a.decided_by, "
-        "a.deny_reason, a.note, a.why, a.result, a.expires_at, a.requester_id FROM approval_request a WHERE a.episode_id=? AND a.tenant_id=? ORDER BY a.created_at, a.rowid",
+        "a.deny_reason, a.note, a.why, a.result, a.expires_at, a.requester_id, a.undo FROM approval_request a WHERE a.episode_id=? AND a.tenant_id=? ORDER BY a.created_at, a.rowid",
         (ep["id"], tenant_id)).fetchall(), "args", "dry_run", "reasons", "decided_by", "result")
     approvals = _approval_views(conn, t, approvals)
     return {"id": ep["id"], "task": ep["input"]["task"], "output": ep["output"], "outcome": ep["outcome"], "outcome_src": ep["outcome_src"], "env": ep["env"],
@@ -1287,6 +1291,9 @@ def _tool_view(conn, row) -> dict:
              role_choices=list(tools.ROLE_CHOICES), personal=bool(row["owner_user"]),
              tier_choices=list(tools.TIERS[tools.TIERS.index(d["catalog_tier"]):]) if d["catalog_tier"] in tools.TIERS else [],
              classified=spec.classified if spec else False, warnings=spec.warnings if spec else [], rollback_hint=spec.rollback_hint if spec else "",
+             undo_supported=bool(spec and spec.undo),
+             undo_evidence=conn.execute("SELECT count(*) c FROM undo_evidence v JOIN change_record c ON c.id=v.change_id WHERE c.tenant_id=? AND c.tool=?",
+                                        (row["tenant_id"], row["tool"])).fetchone()["c"],
              server_description=f"{c['title']} · {tools.TEMPLATES[c['template']].title if c['template'] in tools.TEMPLATES else c['template']}" if c else "",
              is_new=d["approved_by"] is None)
     return d
@@ -1728,7 +1735,9 @@ def policy_get(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
             "auto_mode": {"custom": automode.tenant_config(conn, t.tenant_id), "effective": automode.effective(automode.tenant_config(conn, t.tenant_id)),
                           "defaults": automode.defaults()},
             "grant_ttl_minutes": settings.grant_ttl_minutes,
-            "rule_autopublish": compiler.autopublish_policy(conn, t.tenant_id)}
+            "rule_autopublish": compiler.autopublish_policy(conn, t.tenant_id),
+            "undo": {**undo.settings_of(conn, t.tenant_id), "recipes": undo.recipes(conn, t.tenant_id),
+                     "verifying": conn.execute("SELECT count(*) c FROM change_record WHERE tenant_id=? AND status='verifying'", (t.tenant_id,)).fetchone()["c"]}}
 
 
 class PolicyBody(BaseModel):
@@ -1752,6 +1761,7 @@ class TenantSettings(BaseModel):
     self_approve: bool | None = None
     auto_mode: dict | None = None
     rule_autopublish: dict | None = None
+    undo_settings: dict | None = None
 
 
 @app.patch("/api/tenant")
@@ -1778,7 +1788,62 @@ def tenant_patch(body: TenantSettings, t: Tenant = Depends(current_tenant), conn
             raise HTTPException(400, f"luật auto mode không hợp lệ: {exc}") from exc
         conn.execute("UPDATE tenant SET auto_mode=? WHERE id=?", (json.dumps(cfg, ensure_ascii=False), t.tenant_id))
         log.info("tenant %s: %s đặt auto_mode=%s", t.tenant_id, t.principal.username, cfg)
+    if body.undo_settings is not None:
+        try:
+            merged = undo.save_settings(conn, t.tenant_id, body.undo_settings)
+        except ValueError as exc:
+            raise HTTPException(400, f"cài đặt hoàn tác không hợp lệ: {exc}") from exc
+        log.info("tenant %s: %s đặt undo_settings=%s", t.tenant_id, t.principal.username, merged)
     return policy_get(t, conn)
+
+
+@app.get("/api/changes")
+def changes_list(ids: str = "", t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    """Trạng thái hiện tại của các lệnh ghi đã chạy (chat hỏi lại khi đang chờ kiểm tra)."""
+    wanted = [i for i in ids.split(",") if i][:50]
+    if not wanted:
+        return []
+    rows = conn.execute(f"SELECT * FROM change_record WHERE tenant_id=? AND id IN ({','.join('?' * len(wanted))})", (t.tenant_id, *wanted)).fetchall()
+    return [undo.view(conn, dict(r)) | {"can_revert": undo.can_revert(conn, dict(r), t.user_id, t.roles, t.principal.is_org_admin)} for r in rows]
+
+
+class UndoBody(BaseModel):
+    force: bool = False  # đã xem danh sách khác biệt và vẫn muốn đè
+
+
+@app.post("/api/changes/{change_id}/undo")
+def change_undo(change_id: str, body: UndoBody, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    try:
+        row = undo.get(conn, t.tenant_id, change_id)
+        if not undo.can_revert(conn, row, t.user_id, t.roles, t.principal.is_org_admin):
+            raise HTTPException(403, f"chỉ người chạy lệnh hoặc người có quyền duyệt ở {row['env']} được hoàn tác")
+        out = undo.revert(conn, t.tenant_id, change_id, t.user_id, force=body.force)
+    except undo.UndoError as exc:
+        if exc.data:
+            raise HTTPException(exc.status, {"message": str(exc), **exc.data}) from exc
+        raise HTTPException(exc.status, str(exc)) from exc
+    log.info("tenant %s: %s hoàn tác thay đổi %s%s", t.tenant_id, t.principal.username, change_id, " (đè thay đổi sau đó)" if body.force else "")
+    return out
+
+
+@app.get("/api/trash")
+def trash_list(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    return [v | {"can_revert": undo.can_revert(conn, undo.get(conn, t.tenant_id, v["id"]), t.user_id, t.roles, t.principal.is_org_admin),
+                 "can_purge": gateway.can_approve(t.roles, v["env"], t.principal.is_org_admin)} for v in undo.trash(conn, t.tenant_id)]
+
+
+@app.post("/api/changes/{change_id}/purge")
+def change_purge(change_id: str, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    """Xoá thật thứ đang trong thùng rác: người bấm phải có quyền duyệt ở môi trường đó, cú bấm là lần duyệt."""
+    try:
+        row = undo.get(conn, t.tenant_id, change_id)
+        if not gateway.can_approve(t.roles, row["env"], t.principal.is_org_admin):
+            raise HTTPException(403, f"cần quyền duyệt ở {row['env']} để xoá thật")
+        out = undo.purge(conn, t.tenant_id, change_id, t.user_id)
+    except undo.UndoError as exc:
+        raise HTTPException(exc.status, str(exc)) from exc
+    log.info("tenant %s: %s xoá thật %s", t.tenant_id, t.principal.username, change_id)
+    return out
 
 
 def _quota_resets_at() -> str:

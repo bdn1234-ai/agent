@@ -35,8 +35,9 @@ async function api(method, path, body) {
   if (res.status === 401 && path !== "/api/auth/login") { state.me = null; renderLogin(); throw new Error("Phiên đã hết hạn"); }
   if (!res.ok) {
     const detail = data && data.detail;
-    const err = new Error(typeof detail === "string" ? detail : `Lỗi ${res.status}`);
+    const err = new Error(typeof detail === "string" ? detail : detail && detail.message ? detail.message : `Lỗi ${res.status}`);
     err.status = res.status;  // để nơi gọi phân biệt "không còn" (404) với lỗi tạm thời
+    if (detail && typeof detail === "object" && !Array.isArray(detail)) err.data = detail;
     throw err;
   }
   return data;
@@ -315,7 +316,8 @@ function span(ms) {
 }
 const STATE_TONE = { needs_human: "bad", awaiting_approval: "warn", waiting_quota: "warn", investigating: "info", queued: "info", verifying: "info", handled: "ok", cleared: "ok", closed: "" };
 const EV_MARK = { alert: "alert", alert_resolved: "clear", resolved: "clear", reopened: "alert", investigated: "agent",
-  ran: "human", verified: "clear", closed: "human", task_added: "human", task_done: "clear", task_reopened: "human", failed: "fail" };
+  ran: "human", verified: "clear", closed: "human", task_added: "human", task_done: "clear", task_reopened: "human", failed: "fail",
+  change_checked: "clear", change_check_failed: "fail", reverted: "human", revert_failed: "fail" };
 const EV_FILTERS = [["all", "Tất cả"], ["action", "Hành động"], ["agent", "Điều tra"], ["alert", "Cảnh báo"]];
 
 async function incidentDetail(main, id) {
@@ -817,7 +819,7 @@ function toolCatalogSection() {
         t.risk_tier !== t.catalog_tier && h("span", { class: "small" }, `template: ${t.catalog_tier}`), t.personal && h("span", { class: "badge info" }, "cá nhân"), h("span", { class: "badge" }, ACTION_LABEL[t.action_class] || t.action_class),
         t.untrusted_output ? h("span", { class: "badge warn" }, "nội dung ngoài") : null, t.is_new && !removed && h("span", { class: "badge info" }, "Mới"),
         removed && h("span", { class: "badge bad" }, "Đã gỡ khỏi danh mục"), !t.classified && h("span", { class: "badge warn" }, "Chưa phân loại"), h("span", { class: "spacer" }), state),
-      h("div", { class: "small" }, t.description + (t.rollback_hint ? ` · Hoàn tác: ${t.rollback_hint}` : "")),
+      h("div", { class: "small" }, t.description + (t.action_class === "read" ? "" : " · " + undoText(t))),
       !removed && h("div", { class: "tool-perms" }, h("span", { class: "small" }, "Môi trường"), envs, !t.personal && h("span", { class: "small sep" }, "Vai trò"), t.personal ? null : roles, h("span", { class: "small sep" }, "Mức"), tier),
       t.warnings.length > 0 && h("div", { class: "small warn-text" }, "Cảnh báo: " + t.warnings.join("; ")));
   }
@@ -1149,6 +1151,71 @@ function ruleAutopublishCard(p) {
     isAdmin() && h("div", { class: "row" }, h("button", { onclick: save }, "Lưu")));
 }
 
+// Cột hoàn tác của danh sách công cụ: kagent tự suy ra cách hoàn tác hay không, và đã có bao nhiêu bằng chứng.
+function undoText(t) {
+  if (!t.undo_supported) return "Không hoàn tác được tự động → lệnh ghi luôn hỏi" + (t.rollback_hint ? ` (gợi ý: ${t.rollback_hint})` : "");
+  return "Hoàn tác: kagent tự suy ra từ trạng thái trước khi chạy · " + (t.undo_evidence ? `${t.undo_evidence} lần hoàn tác/diễn tập OK` : "chưa có bằng chứng");
+}
+
+// Tự chạy cần hoàn tác được: thời gian kiểm tra, tự hoàn tác, thùng rác, ngưỡng sao lưu, diễn tập, loại hoàn tác tin cậy.
+function undoCard(p) {
+  const u = p.undo;
+  const num = (v, label, min, max) => h("input", { type: "number", min, max, value: v, class: "narrow", "aria-label": label, disabled: !isAdmin() });
+  const verify = num(u.verify_minutes, "Thời gian kiểm tra sau khi chạy (phút)", 1, 120), days = num(u.trash_days, "Số ngày giữ trong thùng rác", 1, 90),
+    rows = num(u.max_rows, "Số dòng sao lưu tối đa", 0, 10000000);
+  const box = (on, label) => h("input", { type: "checkbox", checked: on, disabled: !isAdmin(), "aria-label": label });
+  const revert = box(u.auto_revert, "Tự hoàn tác khi kiểm tra không đạt"), dDev = box(u.drill.dev, "Diễn tập ở dev"), dStg = box(u.drill.staging, "Diễn tập ở staging");
+  const known = [...new Set([...Object.keys(u.recipes), ...u.trusted])].sort();
+  const trusted = new Set(u.trusted);
+  const recipeRows = known.map((r) => {
+    const n = u.recipes[r] || { revert: 0, drill: 0 };
+    const cb = h("input", { type: "checkbox", checked: trusted.has(r), disabled: !isAdmin(), "aria-label": `Tin cậy ${r}`, onchange: (e) => (e.target.checked ? trusted.add(r) : trusted.delete(r)) });
+    return h("tr", {}, h("td", {}, h("code", {}, r)), h("td", {}, String(n.revert)), h("td", {}, String(n.drill)), h("td", {}, cb));
+  });
+  const save = guard(async () => {
+    await api("PATCH", "/api/tenant", { undo_settings: { verify_minutes: Number(verify.value), trash_days: Number(days.value), max_rows: Number(rows.value),
+      auto_revert: revert.checked, drill: { dev: dDev.checked, staging: dStg.checked, prod: false }, trusted: [...trusted] } });
+    toast("Đã lưu"); renderShell();
+  });
+  const line = (...kids) => h("label", { class: "row small" }, ...kids);
+  return h("div", { class: "card" },
+    h("p", { class: "small" }, "Ô \"auto mode\" chỉ tự chạy lệnh ghi khi đủ: (a) kagent tự dựng được lệnh hoàn tác từ trạng thái đọc ngay trước khi chạy; (b) lệnh chỉ chạm đúng các đối tượng nêu tên; (c) có bằng chứng lệnh hoàn tác chạy được: chạy thử qua, đã từng hoàn tác hoặc diễn tập thành công, hoặc admin đánh dấu tin cậy bên dưới; và đối tượng không đang rollout dở hay có thay đổi khác chờ kiểm tra. Thiếu điều kiện nào thì hỏi người. Xoá index, xoá bảng thành xoá mềm; xoá/sửa dòng được sao lưu trước."),
+    line("Kiểm tra sau khi chạy", verify, "phút: đối tượng phải sẵn sàng và không có cảnh báo mới trên namespace của nó"),
+    line(revert, "Tự hoàn tác lệnh đã tự chạy khi kiểm tra không đạt"),
+    line("Giữ trong thùng rác", days, "ngày rồi báo đến hạn xoá thật (người có quyền duyệt bấm xoá)"),
+    line("Sao lưu tối đa", rows, "dòng; nhiều hơn thì coi là không hoàn tác được"),
+    line("Diễn tập lần đầu của mỗi loại hoàn tác ở", dDev, "dev", dStg, "staging", h("span", { class: "muted" }, "(hoàn tác rồi chạy lại ngay sau lệnh; không bao giờ ở prod)")),
+    known.length > 0 && h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Loại hoàn tác"), h("th", {}, "Hoàn tác OK"), h("th", {}, "Diễn tập OK"), h("th", {}, "Tin cậy"))),
+      h("tbody", {}, recipeRows))),
+    isAdmin() && h("div", { class: "row" }, h("button", { onclick: save }, "Lưu")));
+}
+
+// Nút đỏ: dừng mọi lệnh ghi tự chạy và việc tự hoàn tác; lệnh đọc vẫn chạy.
+function stopBar(p) {
+  const u = p.undo;
+  const set = (paused) => guard(async () => { await api("PATCH", "/api/tenant", { undo_settings: { paused } }); toast(paused ? "Đã dừng mọi lệnh ghi tự chạy" : "Đã bật lại"); renderShell(); });
+  return h("div", { class: "card stop-bar" + (u.paused ? " paused" : "") },
+    isAdmin() && (u.paused ? h("button", { onclick: set(false) }, "Bật lại lệnh tự chạy") : h("button", { class: "danger", onclick: set(true) }, "■ Dừng mọi lệnh tự chạy")),
+    h("span", { class: "small" }, u.paused ? "Đang dừng: mọi lệnh ghi phải có người duyệt, không tự hoàn tác." : `Đang bật · ${u.verifying} lệnh đang chờ kiểm tra`));
+}
+
+async function trashCard() {
+  const items = await api("GET", "/api/trash");
+  const card = h("div", { class: "card scroll" });
+  if (!items.length) { card.append(h("div", { class: "small muted" }, "Thùng rác trống.")); return card; }
+  const due = (it) => it.purge_at && new Date(it.purge_at) <= new Date();
+  card.append(h("table", {}, h("thead", {}, h("tr", {}, ["Đối tượng", "Cách giữ", "Lúc", "Môi trường", "Xoá thật", ""].map((x) => h("th", {}, x)))),
+    h("tbody", {}, items.map((it) => h("tr", {},
+      h("td", {}, it.targets.join(", ")), h("td", { class: "small" }, it.summary || ""), h("td", {}, fmtTime(it.created_at)), h("td", {}, it.env),
+      h("td", { class: due(it) ? "warn-text" : "" }, due(it) ? "đến hạn" : `từ ${fmtTime(it.purge_at)}`),
+      h("td", {}, it.can_revert && h("button", { class: "ghost small-btn", onclick: guard(async () => { await api("POST", `/api/changes/${it.id}/undo`, {}); toast("Đã khôi phục"); renderShell(); }) }, "Khôi phục"),
+        it.can_purge && h("button", { class: "danger small-btn", onclick: guard(async () => {
+          if (!window.confirm(`Xoá thật ${it.targets.join(", ")}? Không khôi phục được nữa.`)) return;
+          await api("POST", `/api/changes/${it.id}/purge`); toast("Đã xoá thật"); renderShell();
+        }) }, "Xoá thật…")))))));
+  return card;
+}
+
 const AUTO_SECTIONS = [
   ["environment", "Môi trường", "Mô tả hạ tầng: cụm, namespace, project nào là prod, đích nào tin cậy."],
   ["hard_deny", "Cấm luôn", "Chặn kể cả khi người dùng yêu cầu."],
@@ -1190,7 +1257,7 @@ async function policyView(main) {
   const simOut = h("div", { class: "small" });
   const sim = guard(async () => { const r = await api("POST", "/api/policy/simulate", { tool: simTool.value, env: simEnv.value }); simOut.textContent = `${r.risk_tier} → ${r.outcome === "judge" ? "auto mode xét" : LABEL[r.outcome] || r.outcome}${r.required ? `, ${r.required} người duyệt` : ""}. ${r.reasons.join("; ")}`; });
   const tiers = ["R0", "R1", "R2", "R3", "R4"];
-  main.append(h("h2", {}, "Chính sách hiệu lực"), h("div", { class: "card scroll" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Mức"), ["dev", "staging", "prod"].map((e) => h("th", {}, `${e} (${p.effective.environments[e].auto_execute})`)))),
+  main.append(stopBar(p), h("h2", {}, "Chính sách hiệu lực"), h("div", { class: "card scroll" }, h("table", {}, h("thead", {}, h("tr", {}, h("th", {}, "Mức"), ["dev", "staging", "prod"].map((e) => h("th", {}, `${e} (${p.effective.environments[e].auto_execute})`)))),
     h("tbody", {}, tiers.map((t) => h("tr", {}, h("td", {}, t), ["dev", "staging", "prod"].map((e) => h("td", {}, cellText(p.effective.matrix[t][e]))))))),
     h("div", { class: "row" }, h("span", { class: "small" }, "Luật chặn: " + (p.effective.deny.map((d) => `${d.tool}@${d.env}`).join(", ") || "không"))),
     isAdmin() && h("div", { class: "row" }, h("button", { class: "ghost", onclick: setFlag("change_freeze", !p.change_freeze) }, p.change_freeze ? "Tắt change freeze" : "Bật change freeze"), h("button", { class: "ghost", onclick: setFlag("auto_promote", !p.auto_promote) }, p.auto_promote ? "Tắt tự động thăng hạng" : "Bật tự động thăng hạng"),
@@ -1198,6 +1265,8 @@ async function policyView(main) {
     h("div", { class: "small" }, p.self_approve ? "Người dùng tự xác nhận lệnh cần duyệt của chính mình. Thay đổi công cụ dùng chung vẫn cần admin." : "Lệnh cần duyệt phải do người có quyền duyệt khác xác nhận; R3 ở prod cần 2 người.")),
     h("div", { class: "small" }, `"Cho phép trong ${p.grant_ttl_minutes} phút" khi duyệt: cùng công cụ, cùng namespace thì tự chạy, trừ khi có lý do bắt buộc hỏi (change freeze, quota ghi, chạy thử lỗi).`),
     h("h2", {}, "Luật auto mode"), autoModeCard(p),
+    h("h2", {}, "Tự chạy cần hoàn tác được"), undoCard(p),
+    h("h2", {}, "Thùng rác"), await trashCard(),
     h("h2", {}, "Tự publish quy ước core"), ruleAutopublishCard(p),
     h("h2", {}, "Thử quyết định"), h("div", { class: "card" }, h("div", { class: "row" }, simTool, simEnv, h("button", { class: "ghost", onclick: sim }, "Thử")), simOut),
     isAdmin() && h("h2", {}, "Overlay của tenant (chỉ được siết)"), isAdmin() && h("div", { class: "card" }, editor, h("div", { class: "row" }, h("button", { onclick: save }, "Lưu"))));

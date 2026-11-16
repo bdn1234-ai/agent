@@ -49,7 +49,8 @@ def list_incidents(conn, tenant_id: str, status: str = "open", limit: int = 100)
 
 # Chỉ việc đã xảy ra với sự cố: lệnh đã thực sự chạy (ran, failed), không có đề xuất hay trạng thái chờ (no_action, quota, error, stopped...).
 # Sự kiện ẩn vẫn ghi: mốc cho bản tóm tắt, và "Đang chờ" đọc no_action/quota/error/stopped.
-SHOWN_EVENTS = ("investigated", "verified", "resolved", "reopened", "closed", "task_added", "task_done", "task_reopened", "ran", "failed")
+SHOWN_EVENTS = ("investigated", "verified", "resolved", "reopened", "closed", "task_added", "task_done", "task_reopened", "ran", "failed",
+                "change_checked", "change_check_failed", "reverted", "revert_failed")  # kiểm tra sau khi chạy và hoàn tác (undo.py)
 
 
 def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
@@ -95,6 +96,7 @@ def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
 
 EVENT_CAT = {"alert": "alert", "alert_resolved": "alert", "resolved": "alert", "reopened": "alert",
              "ran": "action", "failed": "action", "verified": "action", "closed": "action",
+             "change_checked": "action", "change_check_failed": "action", "reverted": "action", "revert_failed": "action",
              "task_added": "action", "task_done": "action", "task_reopened": "action"}
 
 

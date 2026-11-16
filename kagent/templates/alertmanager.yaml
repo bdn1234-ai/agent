@@ -44,6 +44,7 @@ tools:
     data_sensitivity: internal
     dry_run: server
     rollback_hint: Gỡ silence bằng expire_silence với silence_id trả về
+    undo: silence_undo
     input_schema:
       properties:
         matchers: {type: string, description: "nhan=gia_tri (hoặc !=, =~, !~), cách nhau dấu phẩy, ví dụ alertname=HighCPU"}
@@ -61,6 +62,7 @@ tools:
     data_sensitivity: internal
     dry_run: server
     rollback_hint: Tạo lại silence với cùng matchers
+    undo: silence_undo
     input_schema:
       properties:
         silence_id: {type: string}

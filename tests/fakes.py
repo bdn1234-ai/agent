@@ -43,11 +43,14 @@ class Infra:
         self.deployments = {"default": {"web": 3, "api": 2}, "payments": {"checkout": 4}}
         self.silences: list[dict] = []
         self.indices = {"logs-app": 120, "logs-old": 40}
+        self.closed: set[str] = set()
         self.requests: list[httpx.Request] = []
         self.am_filters: list[list[str]] = []
         self.expired: list[str] = []
         self.k8s_objects: dict[tuple, dict] = {}  # (kind, namespace, name) → object, cho ServiceAccount/Secret/RBAC
         self.k8s_namespaces = {"default", "payments"}
+        self.k8s_rv: dict[tuple, int] = {}
+        self.k8s_unready: dict[tuple, int] = {}  # (ns, tên) → số pod sẵn sàng, giả lập rollout không lên
         self.k8s_forbid_grant = False  # giả lập tài khoản quản trị thiếu quyền nên không cấp được Role
         self.os_tokens: set[str] = set()
         self.os_logins: list[dict] = []
@@ -57,6 +60,19 @@ class Infra:
                            "startsAt": "2026-11-11T00:00:00Z", "annotations": {"summary": "CPU cao"}, "fingerprint": "f1"},
                           {"labels": {"alertname": "HighCPU", "severity": "warning", "namespace": "web"}, "status": {"state": "active"}, "fingerprint": "f2"},
                           {"labels": {"alertname": "Down", "severity": "critical", "namespace": "web"}, "status": {"state": "active"}, "fingerprint": "f3"}]
+
+    def deployment(self, ns: str, name: str, replicas: int | None = None) -> dict:
+        """Deployment dạng JSON của API server giả; resourceVersion tăng mỗi lần sửa."""
+        n = self.deployments[ns][name] if replicas is None else replicas
+        rv = self.k8s_rv.get((ns, name), 1)
+        return {"apiVersion": "apps/v1", "kind": "Deployment",
+                "metadata": {"name": name, "namespace": ns, "resourceVersion": str(rv), "generation": rv, "uid": f"uid-{ns}-{name}"},
+                "spec": {"replicas": n, "template": {"spec": {"containers": [{"name": name, "image": f"{name}:1"}]}}},
+                "status": {"replicas": n, "updatedReplicas": n, "availableReplicas": self.k8s_unready.get((ns, name), n), "observedGeneration": rv}}
+
+    def set_deployment(self, ns: str, name: str, replicas: int) -> None:
+        self.deployments.setdefault(ns, {})[name] = replicas
+        self.k8s_rv[(ns, name)] = self.k8s_rv.get((ns, name), 1) + 1
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self.handle)
@@ -268,6 +284,14 @@ class Infra:
         if path == "/api/alertmanager/grafana/api/v2/silences" and r.method == "POST":
             self.silences.append(json.loads(r.content))
             return self._json({"silenceID": f"s{len(self.silences)}"}, 202)
+        m = re.fullmatch(r"/api/alertmanager/grafana/api/v2/silence/s(\d+)", path)
+        if m:
+            sid = f"s{m.group(1)}"
+            if r.method == "DELETE":
+                self.expired.append(sid)
+                return self._json({})
+            body = self.silences[int(m.group(1)) - 1]
+            return self._json({"id": sid, **body, "status": {"state": "expired" if sid in self.expired else "active"}})
         return self._json({"message": "not found"}, 404)
 
     # --- Prometheus ---
@@ -375,7 +399,15 @@ class Infra:
             return self._json([{"index": i, "health": "green", "docs.count": str(n), "store.size": "1mb"} for i, n in self.indices.items()])
         m = re.fullmatch(r"/_cat/indices/([\w.-]+)", path)
         if m:
-            return self._json([{"index": m.group(1), "docs.count": str(self.indices[m.group(1)])}] if m.group(1) in self.indices else [])
+            name = m.group(1)
+            return self._json([{"index": name, "docs.count": str(self.indices[name]), "status": "close" if name in self.closed else "open"}]
+                              if name in self.indices else [])
+        m = re.fullmatch(r"/([\w.-]+)/_(close|open)", path)
+        if m and r.method == "POST":
+            if m.group(1) not in self.indices:
+                return self._json({"error": "index_not_found_exception"}, 404)
+            (self.closed.add if m.group(2) == "close" else self.closed.discard)(m.group(1))
+            return self._json({"acknowledged": True})
         m = re.fullmatch(r"/([\w.-]+)", path)
         if m and r.method == "DELETE":
             if m.group(1) not in self.indices:
@@ -400,7 +432,7 @@ def sqlite_open(path: Path):
     def _open(p, kind, read_only):
         from kagent import net
         net.check_host(p["host"], int(p.get("port") or 5432), p.get("_allow_private", False))
-        conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
+        conn = sqlite3.connect(path, timeout=10, check_same_thread=False, autocommit=False)  # DDL nằm trong giao dịch như PostgreSQL
         if read_only:
             conn.execute("PRAGMA query_only=ON")
         return conn
@@ -431,7 +463,48 @@ def kubectl_runner(infra: "Infra"):
         suffix = " (server dry run)" if dry else ""
         deps = infra.deployments.get(ns, {})
         missing = lambda kind, name: (1, "", f'Error from server (NotFound): {kind} "{name}" not found', False)
+        as_json = cmd[-2:] == ["-o", "json"]
+        if as_json:
+            cmd = cmd[:-2]
+        as_name = cmd[-2:] == ["-o", "name"]
+        if as_name:
+            cmd = cmd[:-2]
+        deploy = lambda target: target.split("/")[0].split(".")[0] in ("deploy", "deployment", "deployments")
         match cmd:
+            case ["get", target] if as_json and deploy(target):
+                name = target.split("/")[-1]
+                return (0, json.dumps(infra.deployment(ns, name)), "", False) if name in deps else missing("deployments.apps", name)
+            case ["scale", target, *rest] if as_json:
+                name = target.split("/")[-1]
+                if name not in deps:
+                    return missing("deployments.apps", name)
+                replicas = int(next(a for a in rest if a.startswith("--replicas=")).split("=", 1)[1])
+                if not dry:
+                    infra.set_deployment(ns, name, replicas)
+                return 0, json.dumps(infra.deployment(ns, name, replicas)), "", False
+            case ["rollout", "restart", target] if as_json:
+                name = target.split("/")[-1]
+                return (0, json.dumps(infra.deployment(ns, name)), "", False) if name in deps else missing("deployments.apps", name)
+            case ["replace" | "create", "-f", "-"]:
+                obj = json.loads(stdin)
+                md = obj["metadata"]
+                space = infra.deployments.setdefault(md.get("namespace") or ns, {})
+                if cmd[0] == "replace" and md["name"] not in space:
+                    return missing("deployments.apps", md["name"])
+                if cmd[0] == "create" and md["name"] in space:
+                    return 1, "", f'Error from server (AlreadyExists): deployments.apps "{md["name"]}" already exists', False
+                if not dry:
+                    infra.set_deployment(md.get("namespace") or ns, md["name"], obj["spec"]["replicas"])
+                if as_json:
+                    return 0, json.dumps({**obj, "metadata": {**md, "namespace": md.get("namespace") or ns}}), "", False
+                return 0, f"deployment.apps/{md['name']} {cmd[0]}d{suffix}\n", "", False
+            case ["delete", target] if deploy(target):
+                name = target.split("/")[-1]
+                if name not in deps:
+                    return missing("deployments.apps", name)
+                if not dry:
+                    del deps[name]
+                return 0, f"deployment.apps/{name}\n" if as_name else f'deployment.apps "{name}" deleted{suffix}\n', "", False
             case ["get", "pods" | "pod" | "po", *_]:
                 rows = [f"{d}-{i}   1/1     Running   0          1d" for d, n in deps.items() for i in range(n)]
                 return 0, "NAME    READY   STATUS    RESTARTS   AGE\n" + "\n".join(rows) + "\n", "", False
@@ -448,7 +521,7 @@ def kubectl_runner(infra: "Infra"):
                     return missing("deployments.apps", name)
                 replicas = int(next(a for a in rest if a.startswith("--replicas=")).split("=", 1)[1])
                 if not dry:
-                    deps[name] = replicas
+                    infra.set_deployment(ns, name, replicas)
                 return 0, f"deployment.apps/{name} scaled{suffix}\n", "", False
             case ["rollout", "restart", target, *_]:
                 name = target.split("/")[-1]

@@ -1,4 +1,7 @@
-"""MCP Gateway: mọi lệnh gọi công cụ qua 3 cửa — chặn cứng → ma trận rủi ro × môi trường → auto mode (classifier, xem automode.py)."""
+"""MCP Gateway: mọi lệnh gọi công cụ qua 3 cửa — chặn cứng → ma trận rủi ro × môi trường → auto mode (classifier, xem automode.py).
+
+Lệnh ghi ở ô auto mode còn phải qua cửa thứ tư: hoàn tác được và hoàn tác đáng tin (undo.py).
+"""
 from __future__ import annotations
 
 import copy
@@ -8,12 +11,12 @@ import json
 import shlex
 from dataclasses import dataclass, field
 
-from . import automode, datafilter, db
+from . import automode, datafilter, db, undo
 from .config import settings
 from .retrieval import tokenize
 from . import net
 from .connectors.base import ConnectorError
-from .tools import callable_by
+from .tools import callable_by, spec_of
 
 ENVS = ("dev", "staging", "prod")
 TIERS = ("R0", "R1", "R2", "R3", "R4")
@@ -328,11 +331,18 @@ def _invoke(conn, ctx: CallContext, tool_name: str, args: dict) -> dict:
     forced: list[str] = list(ctx.forced)
     if isinstance(dry_result, dict) and dry_result.get("error"):
         forced.append("chạy thử phía server lỗi")
+    plan = None
     if meta["action_class"] != "read":
         if tenant["change_freeze"]:
             forced.append("đang trong change freeze")
         if writes_today(conn, ctx.tenant_id) >= tenant["write_quota_daily"]:
             forced.append("vượt quota ghi trong ngày")
+        if undo.paused(conn, ctx.tenant_id):
+            forced.append("admin đã dừng mọi lệnh ghi tự chạy")
+        if not tool.local:
+            plan = undo.plan(conn, ctx.tenant_id, tool_name, args, ctx.env)
+            forced += plan.get("forced") or []
+            step["undo"] = undo.public(plan, undo.checks(conn, ctx.tenant_id, plan))
 
     policy = get_policy(conn, ctx.tenant_id)
     # Công cụ local không chạm môi trường nào, nên dùng cột dev của ma trận (R4 vẫn luôn phải hỏi).
@@ -356,7 +366,7 @@ def _invoke(conn, ctx: CallContext, tool_name: str, args: dict) -> dict:
 
     if decision.outcome != "auto":
         action = {"tool": tool_name, "args": args, "risk_tier": tier, "action_class": meta["action_class"], "env": ctx.env,
-                  **({"dry_run": dry_result} if dry_result is not None else {})}
+                  **({"dry_run": dry_result} if dry_result is not None else {}), **({"undo": undo.for_classifier(plan)} if plan else {})}
         verdict = automode.classify(conn, ctx.tenant_id, ctx.intent, ctx.calls, action)
         step["judge"] = verdict
         said = f"{verdict['rule']}: {verdict['reason']}" if verdict["rule"] else verdict["reason"]
@@ -365,7 +375,14 @@ def _invoke(conn, ctx: CallContext, tool_name: str, args: dict) -> dict:
                 decision.reasons.append("nhận xét auto mode: " + ("khớp yêu cầu của người dùng" if verdict["allow"] else said))
         elif verdict["allow"]:
             ctx.denials["streak"] = 0
-            decision = Decision("auto", reasons=["auto mode cho qua" + (f": {verdict['reason']}" if verdict["reason"] else "")])
+            passed = "auto mode cho qua" + (f": {verdict['reason']}" if verdict["reason"] else "")
+            if plan is not None and not undo.eligible(step["undo"]["checks"]):
+                # Ô judge chỉ tự chạy lệnh ghi khi rollback được và rollback đáng tin; thiếu điều kiện nào thì hỏi người.
+                decision = Decision("ask", 1, ["không tự chạy vì: " + "; ".join(c["text"] for c in step["undo"]["checks"] if not c["ok"]),
+                                               "nhận xét auto mode: khớp yêu cầu của người dùng"])
+                required = 1
+            else:
+                decision = Decision("auto", reasons=[passed])
         elif verdict["allow"] is None:
             decision = Decision("ask", 1, [said or "auto mode không đánh giá được"])
             required = 1
@@ -385,16 +402,21 @@ def _invoke(conn, ctx: CallContext, tool_name: str, args: dict) -> dict:
         approval_id = db.new_id()
         conn.execute(
             "INSERT INTO approval_request(id,tenant_id,episode_id,requester_id,original_request,tool,env,args,dry_run,risk_tier,confidence,"
-            "reasons,rollback_hint,required_approvals,created_at,expires_at,why) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "reasons,rollback_hint,required_approvals,created_at,expires_at,why,undo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (approval_id, ctx.tenant_id, ctx.episode_id, ctx.user_id, ctx.task, tool_name, ctx.env, json.dumps(args, ensure_ascii=False),
              json.dumps(dry_result, ensure_ascii=False), tier, 0, json.dumps(decision.reasons, ensure_ascii=False), tool.rollback_hint,
-             required, db.iso(), db.later(minutes=settings.approval_ttl_minutes), agent_why or None))  # confidence = 0: cột chỉ còn cho dữ liệu cũ
+             required, db.iso(), db.later(minutes=settings.approval_ttl_minutes), agent_why or None,  # confidence = 0: cột chỉ còn cho dữ liệu cũ
+             json.dumps(step.get("undo"), ensure_ascii=False) if step.get("undo") else None))
         audit(conn, ctx, tool_name, args, tier, "pending", decision.reasons, "pending")
         return _called(ctx, {**step, "decision": "pending", "status": "pending", "approval_id": approval_id, "required_approvals": required})
 
-    status, result = _execute(conn, ctx.tenant_id, ctx.env, tool_name, args, ctx.user_id)
+    status, result, change_id = undo.execute(conn, ctx.tenant_id, ctx.env, tool_name, args, ctx.user_id, plan,
+                                             lambda: _execute(conn, ctx.tenant_id, ctx.env, tool_name, args, ctx.user_id),
+                                             auto=True, episode_id=ctx.episode_id, incident_id=ctx.incident_id)
     audit(conn, ctx, tool_name, args, tier, "auto", decision.reasons, status)
     step.update(decision="auto", status=status, result=result, untrusted=tool.untrusted(args))
+    if change_id:
+        step["change_id"] = change_id
     return _called(ctx, step)
 
 
@@ -498,7 +520,11 @@ def decide(conn, tenant_id: str, approval_id: str, user_id: str, roles: set[str]
             if len(decided) < req["required_approvals"]:
                 conn.execute("UPDATE approval_request SET decided_by=? WHERE id=?", (json.dumps(decided), approval_id))
             else:
-                status, result = _execute(conn, tenant_id, req["env"], req["tool"], req["args"], req["requester_id"])
+                # Chụp lại trạng thái lúc chạy thật: thẻ có thể đã chờ duyệt nhiều phút, snapshot lúc tạo thẻ đã cũ.
+                plan = undo.plan(conn, tenant_id, req["tool"], req["args"], req["env"]) if meta["action_class"] != "read" and not (spec_of(meta) or _NO_SPEC).local else None
+                status, result, _ = undo.execute(conn, tenant_id, req["env"], req["tool"], req["args"], req["requester_id"], plan,
+                                                 lambda: _execute(conn, tenant_id, req["env"], req["tool"], req["args"], req["requester_id"]),
+                                                 auto=False, episode_id=req["episode_id"], approval_id=approval_id, incident_id=_incident_of(conn, approval_id))
                 result = _compact(conn, tenant_id, req, meta, result)
                 conn.execute("UPDATE approval_request SET status='approved', decided_by=?, decided_at=?, result=? WHERE id=?",
                              (json.dumps(decided), db.iso(), json.dumps({"status": status, "result": result}, ensure_ascii=False), approval_id))
@@ -512,6 +538,18 @@ def decide(conn, tenant_id: str, approval_id: str, user_id: str, roles: set[str]
                  "args", "decided_by", "reasons", "dry_run", "result")
     out["also_approved"] = also
     return out
+
+
+class _NoSpec:
+    local = False
+
+
+_NO_SPEC = _NoSpec()
+
+
+def _incident_of(conn, approval_id: str) -> str | None:
+    r = conn.execute("SELECT incident_id FROM incident_action WHERE approval_id=?", (approval_id,)).fetchone()
+    return r["incident_id"] if r else None
 
 
 def _compact(conn, tenant_id: str, req: dict, meta, result):

@@ -58,6 +58,7 @@ tools:
     data_sensitivity: internal
     dry_run: server
     rollback_hint: Hết hạn silence hoặc xóa silence trong Grafana
+    undo: silence_undo
     input_schema:
       properties:
         matchers: {type: string, description: "Dạng nhan=gia_tri, cách nhau dấu phẩy, ví dụ alertname=HighCPU"}

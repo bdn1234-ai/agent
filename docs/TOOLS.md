@@ -91,6 +91,33 @@ Theo cách của auto mode trong Claude Code. Lệnh dừng ở bước đầu t
    - **Công cụ local** (`data.*`) ở ô auto mode thì chạy luôn, vì không tác động ra ngoài. `data.script` là R4 nên vẫn luôn hỏi.
    - **Ô luôn hỏi:** classifier vẫn chạy, nhưng chỉ ghi nhận xét vào lý do cho người duyệt xem.
 5. **Grant "cho phép trong 1 giờ":** cùng người, cùng công cụ, cùng môi trường và namespace thì tự chạy, trừ khi có lý do ở bước 2.
+6. **Lệnh ghi ở ô auto mode còn phải hoàn tác được** (`kagent/undo.py`). Auto mode cho qua chưa đủ; thiếu một điều kiện dưới đây thì lệnh thành yêu cầu duyệt, thẻ ghi rõ điều kiện nào chưa đạt:
+   - (a) **Hoàn tác được:** connector tự dựng lệnh hoàn tác từ trạng thái đọc ngay trước khi chạy, không ai viết playbook, không do model viết.
+   - (b) **Đúng phạm vi:** lệnh chạm tối đa 5 đối tượng nêu tên, không chọn theo selector hay `--all`; hoàn tác chỉ đưa đúng các đối tượng đó về bản đã chụp.
+   - (c) **Có bằng chứng:** chạy thử lệnh hoàn tác qua, hoặc loại hoàn tác này đã từng hoàn tác hay diễn tập thành công ở tenant, hoặc admin đánh dấu tin cậy.
+   - (d) **Trạng thái bình thường:** đối tượng không đang rollout dở và không có thay đổi khác của kagent đang chờ kiểm tra.
+
+   Ma trận không đổi: ô luôn hỏi vẫn luôn hỏi, R2+ ở prod vẫn cần người. Classifier cũng thấy `action.undo` (hoàn tác được không, bằng cách nào); luật mặc định "Không hoàn tác được" chặn lệnh ghi không hoàn tác được trừ khi người dùng yêu cầu đích danh.
+
+### Hoàn tác, kiểm tra sau khi chạy, thùng rác
+
+Theo cách Google SRE (rollback là cách giảm thiệt hại chung, phải diễn tập), Amazon (chuẩn bị rollback trước mỗi lần deploy, tránh cửa một chiều) và Claude Code (đọc trạng thái trước lệnh có thể làm mất việc).
+
+| Công cụ | Cách hoàn tác | Không hoàn tác được |
+| --- | --- | --- |
+| `kubectl_write` | Chạy thử phía server với `-o json` để biết đúng đối tượng sẽ đổi, chụp bản hiện tại; hoàn tác = `replace` về bản chụp. Đối tượng vừa tạo: xoá đúng nó (cần nhóm quản trị đã áp dụng). `cordon`↔`uncordon`, `rollout pause`↔`resume`. `rollout restart`: không có gì cần hoàn tác. | `taint`, mọi thứ chạm Secret (kagent không lưu nội dung secret) |
+| `kubectl_admin` | `delete`: chụp manifest rồi mới xoá, hoàn tác = tạo lại. Pod có controller: không cần, controller tạo lại. PVC: đổi PV sang `Retain` trước khi xoá (xoá mềm), hoàn tác = gắn lại PV. | namespace, PV, node, CRD, Secret, `exec`, `run`, `drain` |
+| Elasticsearch `delete_index` | Xoá mềm: đóng index thay vì xoá; mở lại để khôi phục. | index đang đóng |
+| PostgreSQL/MySQL `execute` | `DROP TABLE` → đổi tên sang bảng `_kagent_trash_*`. `DELETE`/`UPDATE`/`TRUNCATE` → sao lưu các dòng sang `_kagent_bak_*`, đếm đủ dòng rồi mới chạy (`UPDATE` cần khoá chính). `ADD COLUMN`, `CREATE TABLE/INDEX` → xoá đúng thứ vừa thêm. | `INSERT`, nhiều câu trong một lần gọi, quá `max_rows` dòng; pha thu gọn của migration (`DROP/RENAME/đổi kiểu cột`, `DROP INDEX/VIEW/SCHEMA`) luôn cần người duyệt |
+| Silence (Alertmanager, Grafana) | Tạo: gỡ đúng silence vừa tạo. Gỡ: tạo lại cùng matchers tới hạn cũ. | |
+| OpenStack `api_write` | Action có cặp ngược (`os-stop`↔`os-start`, `pause`↔`unpause`, `resize`→`revertResize`...). `PUT/PATCH` một tài nguyên: đọc giá trị cũ của các trường sắp đổi rồi ghi lại. | `POST` tạo mới, action khác |
+
+- **Kiểm tra sau khi chạy:** chờ `verify_minutes` (mặc định 5) rồi kiểm tra workload đã sẵn sàng (rollout đủ pod) và không có cảnh báo mới trên namespace hay đối tượng của lệnh (từ nguồn cảnh báo đã kết nối ở tab Sự cố). Có cảnh báo mới thì báo không đạt ngay. Lệnh đã **tự chạy** mà không đạt thì tự hoàn tác (`auto_revert`); lệnh người đã duyệt thì chỉ báo, người quyết định.
+- **Nút Hoàn tác** trên dòng lệnh trong chat, thẻ đã duyệt và thùng rác: người chạy lệnh hoặc người có quyền duyệt ở môi trường đó bấm được. Trước khi hoàn tác, kagent so đối tượng với lúc ngay sau lệnh; đã bị ai sửa thì không tự đè mà hiện danh sách khác biệt để người bấm **Vẫn hoàn tác**. Tự hoàn tác gặp trường hợp này thì dừng và báo.
+- **Diễn tập:** lần đầu một loại hoàn tác chạy ở môi trường bật `drill` (mặc định dev), kagent hoàn tác ngay, so với bản chụp, rồi chạy lại lệnh gốc. Thành công thì loại đó có bằng chứng cho lần sau. Không bao giờ diễn tập ở prod.
+- **Thùng rác:** thứ bị xoá mềm và bản sao lưu nằm ở trang Chính sách, khôi phục được bất cứ lúc nào. Sau `trash_days` (mặc định 7) ngày thì báo đến hạn; xoá thật luôn do người có quyền duyệt bấm, không tự chạy.
+- **Nút dừng:** **Dừng mọi lệnh tự chạy** ở đầu trang Chính sách: mọi lệnh ghi phải có người duyệt và không tự hoàn tác; lệnh đọc vẫn chạy.
+- **Giới hạn:** giữa lúc sao lưu SQL và lúc chạy lệnh có một khoảng ngắn không cùng giao dịch. Cảnh báo chỉ gắn được với lệnh qua nhãn `namespace` hoặc tên đối tượng. MySQL tự commit DDL nên không chạy thử DDL (chạy thử sẽ là chạy thật): lệnh DDL trên MySQL luôn hỏi người.
 
 ## Thẻ duyệt và câu hỏi trong chat
 

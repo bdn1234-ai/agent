@@ -125,6 +125,10 @@ def who(e: dict, name) -> str:
         if data.get("auto"):
             return "tự động" if data.get("origin") == "investigation" else f"{name(actor)} chạy"
         return f"{name(actor)} duyệt"
+    if kind in ("change_checked", "change_check_failed"):
+        return "kagent · kiểm tra sau khi chạy"
+    if kind in ("reverted", "revert_failed"):
+        return "tự hoàn tác" if actor in (None, "system") else f"{name(actor)} hoàn tác"
     if kind == "task_added":
         return f"{name(actor)} thêm việc cần người"
     if kind == "task_done":

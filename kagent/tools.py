@@ -33,7 +33,7 @@ HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
 UNCLASSIFIED = {"action_class": "destructive", "reversible": "no", "blast_radius": "workload", "data_sensitivity": "internal"}
 FILE_KEYS = {"template", "title", "description", "ping", "validate", "fields", "tools"}
 TOOL_KEYS = {"name", "description", "handler", "check", "action_class", "reversible", "blast_radius", "data_sensitivity", "dry_run",
-             "untrusted_output", "trusted_when", "risk_tier", "rollback_hint", "annotations", "input_schema", "local"}
+             "untrusted_output", "trusted_when", "risk_tier", "rollback_hint", "annotations", "input_schema", "local", "undo"}
 FIELD_KEYS = {"name", "type", "required", "default", "description"}
 _IDENT = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 _HANDLER = re.compile(r"^([a-z0-9_]+):([a-z_][a-z0-9_]*)$")
@@ -80,6 +80,7 @@ class ToolSpec:
     local: bool = False  # chỉ xử lý dữ liệu đã lấy về, không chạm hệ thống ngoài nên không phụ thuộc môi trường
     # Công cụ untrusted_output có thể khai hàm (args) -> bool: True khi lệnh cụ thể này chỉ trả dữ liệu có cấu trúc. Chỉ hạ được cờ, không nâng.
     trusted_when: Callable[[dict], bool] | None = None
+    undo: str = ""  # module trong kagent.connectors tự lập kế hoạch hoàn tác cho từng lần gọi (xem undo.py)
 
     def untrusted(self, args: dict | None) -> bool:
         if not self.untrusted_output:
@@ -206,6 +207,14 @@ def _tool(entry: dict, template: str, path: str, errors: list[str]) -> ToolSpec 
     trusted_when = _resolve(entry["trusted_when"], where, errors) if "trusted_when" in entry else None
     if trusted_when and not untrusted:
         errors.append(f"{where}: trusted_when chỉ dùng cho công cụ untrusted_output: true")
+    undo = entry.get("undo", "")
+    if undo:
+        try:
+            module = importlib.import_module(f"kagent.connectors.{undo}")
+            if not (callable(getattr(module, "plan_undo", None)) and callable(getattr(module, "run_op", None))):
+                errors.append(f"{where}: kagent.connectors.{undo} thiếu plan_undo hoặc run_op")
+        except ImportError:
+            errors.append(f"{where}: undo: không có module kagent.connectors.{undo}")
     if dry_run == "server" and "check" not in entry:
         errors.append(f"{where}: dry_run: server cần khai báo check")
     warnings: list[str] = [] if classified else ["chưa phân loại: bị coi là destructive"]
@@ -222,7 +231,7 @@ def _tool(entry: dict, template: str, path: str, errors: list[str]) -> ToolSpec 
     return ToolSpec(name=name, template=template, description=entry["description"].strip(), action_class=action_class, reversible=reversible,
                     blast_radius=blast, data_sensitivity=sensitivity, risk_tier=tier, run=run, properties=props, required=tuple(required),
                     dry_run=dry_run, untrusted_output=untrusted, check=check, rollback_hint=str(entry.get("rollback_hint", "")),
-                    classified=classified, warnings=warnings, local=local, trusted_when=trusted_when)
+                    classified=classified, warnings=warnings, local=local, trusted_when=trusted_when, undo=undo)
 
 
 def load_templates(directory: Path = TEMPLATE_DIR) -> dict[str, Template]:

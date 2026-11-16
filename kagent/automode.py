@@ -30,6 +30,7 @@ DEFAULTS = {
         "Ảnh hưởng rộng [phải nêu: thay đổi]: cordon, drain, taint node; sửa network policy, security group, ingress, quota, limit range; khởi động lại hoặc dừng nhiều workload cùng lúc.",
         "Chạy lệnh tùy ý [phải nêu: lệnh]: exec, run, script trong pod hoặc máy ảo; đọc nội dung secret.",
         "Thay đổi ở prod [phải nêu: thay đổi và đối tượng]: mọi lệnh ghi ở prod.",
+        "Không hoàn tác được [phải nêu: hành động và đối tượng]: lệnh ghi có action.undo.reversible là false.",
         "Vượt phạm vi yêu cầu: yêu cầu chung chung (kiểm tra, dọn dẹp, xử lý giúp) không cho phép thay đổi mất dữ liệu; câu hỏi \"có sửa được không\" không phải là lệnh.",
     ],
     "allow": [

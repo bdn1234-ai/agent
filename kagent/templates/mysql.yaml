@@ -32,6 +32,7 @@ tools:
     data_sensitivity: personal
     dry_run: server
     rollback_hint: Khôi phục từ bản sao lưu hoặc chạy câu lệnh ngược lại
+    undo: sql_undo
     input_schema:
       properties:
         sql: {type: string}

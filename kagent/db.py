@@ -256,6 +256,23 @@ CREATE TABLE IF NOT EXISTS incident_task (
   created_at TEXT NOT NULL, created_by TEXT, done_by TEXT, done_at TEXT, removed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_incident_task ON incident_task(incident_id, created_at);
+
+-- Lệnh ghi đã chạy kèm kế hoạch hoàn tác (undo.py): snapshot trước khi chạy, lệnh hoàn tác, kiểm tra sau khi chạy.
+-- status: verifying | ok | check_failed | conflict | reverted | revert_failed | purged | applied (không có bước kiểm tra)
+CREATE TABLE IF NOT EXISTS change_record (
+  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, episode_id TEXT, approval_id TEXT, incident_id TEXT, user_id TEXT NOT NULL,
+  env TEXT NOT NULL, tool TEXT NOT NULL, args TEXT NOT NULL, recipe TEXT NOT NULL, plan TEXT NOT NULL, auto INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL, check_result TEXT, verify_until TEXT, created_at TEXT NOT NULL,
+  reverted_at TEXT, reverted_by TEXT, revert_result TEXT, purge_at TEXT, purged_at TEXT, purged_by TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_change_status ON change_record(tenant_id, status);
+CREATE INDEX IF NOT EXISTS ix_change_approval ON change_record(approval_id);
+
+-- Bằng chứng một loại hoàn tác chạy được: source = revert (hoàn tác thật thành công) | drill (diễn tập ở dev/staging).
+CREATE TABLE IF NOT EXISTS undo_evidence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, recipe TEXT NOT NULL, source TEXT NOT NULL, change_id TEXT, at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_undo_evidence ON undo_evidence(tenant_id, recipe);
 """
 
 
@@ -386,6 +403,10 @@ def init_schema(conn: sqlite3.Connection) -> None:
         grouping.reset_long_titles(conn)
     if "alert_settings" not in {r["name"] for r in conn.execute("PRAGMA table_info(tenant)")}:
         conn.execute("ALTER TABLE tenant ADD COLUMN alert_settings TEXT NOT NULL DEFAULT '{}'")  # luồng tự xử lý cảnh báo (incidents.py)
+    if "undo_settings" not in {r["name"] for r in conn.execute("PRAGMA table_info(tenant)")}:
+        conn.execute("ALTER TABLE tenant ADD COLUMN undo_settings TEXT NOT NULL DEFAULT '{}'")  # undo.py: kiểm tra sau khi chạy, thùng rác, nút dừng
+    if "undo" not in {r["name"] for r in conn.execute("PRAGMA table_info(approval_request)")}:
+        conn.execute("ALTER TABLE approval_request ADD COLUMN undo TEXT")  # tóm tắt kế hoạch hoàn tác hiện trên thẻ duyệt
     registry = {r["name"] for r in conn.execute("PRAGMA table_info(tool_registry)")}
     for column, ddl in (("catalog_tier", "TEXT"), ("risk_floor", "TEXT"), ("roles", "TEXT NOT NULL DEFAULT '[\"member\"]'"),
                         ("status", "TEXT NOT NULL DEFAULT 'active'"), ("synced_at", "TEXT"), ("connection_id", "TEXT"),

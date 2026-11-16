@@ -61,6 +61,7 @@ tools:
     data_sensitivity: internal
     dry_run: server
     rollback_hint: Khôi phục từ snapshot
+    undo: elasticsearch_undo
     input_schema:
       properties:
         index: {type: string}

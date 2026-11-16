@@ -466,3 +466,13 @@ input.narrow { width: 70px; }
 .ix-suggest p { margin: 0; }
 .ix-done { border-top: 1px solid var(--line); padding-top: 8px; }
 .ix-done ul { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; }
+
+/* Hoàn tác (undo.py): điều kiện trên thẻ duyệt, trạng thái sau khi chạy, nút dừng */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.undo-checks { display: grid; gap: 2px; font-size: 13px; padding: 4px 0; }
+.undo-check { overflow-wrap: anywhere; }
+.change-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; padding: 0 0 4px 26px; }
+.undo-drift { font-size: 13px; padding: 4px 0 6px 26px; }
+.undo-drift ul { margin: 4px 0; padding-left: 18px; }
+.stop-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.stop-bar.paused { background: var(--bad-bg); border-color: var(--bad); }

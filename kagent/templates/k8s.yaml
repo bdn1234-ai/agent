@@ -41,6 +41,7 @@ tools:
     dry_run: server
     untrusted_output: true
     rollback_hint: "Áp lại manifest cũ, hoặc kubectl rollout undo với deployment"
+    undo: kubectl_undo
     input_schema:
       properties:
         command: {type: string, description: "Lệnh kubectl không kèm chữ kubectl, ví dụ: apply -f - hoặc scale deploy/web --replicas=3 -n app"}
@@ -60,6 +61,7 @@ tools:
     dry_run: server
     untrusted_output: true
     rollback_hint: "Tạo lại tài nguyên từ manifest đã lưu; object đã xóa không tự khôi phục"
+    undo: kubectl_undo
     input_schema:
       properties:
         command: {type: string, description: "Lệnh kubectl không kèm chữ kubectl, ví dụ: delete pod web-0 -n app hoặc exec web-0 -n app -- env"}
