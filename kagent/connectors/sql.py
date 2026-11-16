@@ -98,9 +98,15 @@ def _execute(kind):
     return execute
 
 
+_DDL = ("create", "alter", "drop", "truncate", "rename", "grant", "revoke")
+
+
 def _execute_check(kind):
     def check(p, args):
-        result = _run(p, kind, need(args, "sql"), read_only=False, commit=False)  # chạy rồi rollback
+        text = need(args, "sql")
+        if kind == "mysql" and text.lstrip().split(None, 1)[0].lower() in _DDL:
+            raise ConnectorError("MySQL tự commit DDL nên không chạy thử được: chạy thử sẽ là chạy thật")
+        result = _run(p, kind, text, read_only=False, commit=False)  # chạy rồi rollback; DDL của PostgreSQL cũng nằm trong giao dịch
         return {"would_affect_rows": result.get("affected_rows"), "objects": 1}
     return check
 
