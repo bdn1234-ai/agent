@@ -10,7 +10,7 @@ Agent chỉ dùng công cụ thật. Mỗi công cụ được tạo từ một 
 
 | Template | Công cụ (mức rủi ro) | Tham số chính |
 | --- | --- | --- |
-| `k8s` Kubernetes | kubectl_read R1, kubectl_write R3 (có chạy thử), kubectl_admin R4 (xem [Quyền Kubernetes](#quyền-kubernetes-và-công-cụ-kubectl)); helm_read R1 (kèm helm diff, helm drift), helm_write R3 (chạy thử bằng helm diff), helm_admin R4 (xem [Helm](#helm)); `helm_version` 3 hoặc 2 (Tiller: `tiller_namespace`, `tiller_ca_cert`, `tiller_client_cert`, `tiller_client_key`) | kubeconfig (+ context) hoặc api_url + token của tài khoản quản trị, ca_cert, namespace (mặc định của kubectl). Kubeconfig phải nhúng sẵn chứng chỉ (`kubectl config view --raw --minify --flatten`); dùng token hoặc chứng chỉ client, không hỗ trợ exec/auth-provider; api_url, token điền tay được ưu tiên hơn kubeconfig |
+| `k8s` Kubernetes | kubectl_read R1, kubectl_write R3 (có chạy thử), kubectl_admin R4 (xem [Quyền Kubernetes](#quyền-kubernetes-và-công-cụ-kubectl)); helm_read R1 (kèm helm diff, helm drift), helm_write R3 (chạy thử bằng helm diff), helm_admin R4 (xem [Helm](#helm)) | kubeconfig (+ context) hoặc api_url + token của tài khoản quản trị, ca_cert, namespace (mặc định của kubectl). Kubeconfig phải nhúng sẵn chứng chỉ (`kubectl config view --raw --minify --flatten`); dùng token hoặc chứng chỉ client, không hỗ trợ exec/auth-provider; api_url, token điền tay được ưu tiên hơn kubeconfig |
 | `grafana` | search_dashboards, list_datasources, prometheus_query, list_alerts (R0), create_silence R3 | url, token service account, default_datasource_uid |
 | `prometheus` (cả Mimir, Thanos, VictoriaMetrics) | query, query_range, list_alerts, list_rules, list_targets, label_values, metric_metadata (R0). query_range trả min/max/avg/last và vài điểm mẫu thay vì toàn bộ chuỗi | url, token hoặc username/password, tenant_header (X-Scope-OrgID) |
 | `alertmanager` | list_alerts (gom theo alertname, severity), list_silences (R0), create_silence R3, expire_silence R3 (cả hai có chạy thử) | url, token hoặc username/password, tenant_header |
@@ -201,17 +201,8 @@ Helm lưu release trong Secret (`sh.helm.release.v1.*`) của namespace. Theo RB
 - **Chặn:** đọc file hoặc chạy chương trình trên máy chủ (`-f đường dẫn`, `--set-file`, `--post-renderer`, `--ca-file`, `--cert-file`, `--key-file`, `--keyring`, `--verify`, `--custom-diff`, `--temp-path`, `--output-dir`); đổi danh tính hay đích đến (`--kubeconfig`, mọi `--kube-*` trừ `--kube-version`); thông tin đăng nhập repo (`--username`, `--password`). Không dùng `--dry-run` trực tiếp, vì đã có bước chạy thử.
 - **Thời gian chạy:** lệnh đọc mặc định 60 giây, lệnh ghi 300 giây, tối đa 600. Lệnh ghi chưa có `--timeout` thì kagent tự thêm `--timeout` bằng đúng thời gian đó, để helm tự dừng chờ trước khi tiến trình bị giết, tránh release kẹt ở `pending-upgrade`.
 - **Kết quả tin cậy:** chỉ `list` và `version`. `status` có NOTES, `history` có mô tả, manifest do người viết chart ghi.
-- **Image:** cài helm từ `HELM_URL` (mặc định get.helm.sh v3.19.0; helm-diff 3.15 cần helm đủ mới để đọc `platformHooks` trong plugin.yaml), helm-diff từ `HELM_DIFF_URL`, helm-drift từ `HELM_DRIFT_URL` vào `/opt/helm/plugins`; helm 2 từ `HELM2_URL` (v2.17.0, thành `/usr/local/bin/helm2`) và helm-diff v3.7.0 từ `HELM2_DIFF_URL` vào `/opt/helm2/plugins`. Mạng nội bộ thì đặt các biến `KAGENT_HELM_URL`, `KAGENT_HELM_DIFF_URL`, `KAGENT_HELM_DRIFT_URL`, `KAGENT_HELM2_URL`, `KAGENT_HELM2_DIFF_URL` trỏ mirror. Đặt rỗng thì bỏ qua; công cụ sẽ báo "chưa cài" khi được gọi.
+- **Image:** cài helm từ `HELM_URL` (mặc định get.helm.sh v3.19.0; helm-diff 3.15 cần helm đủ mới để đọc `platformHooks` trong plugin.yaml), helm-diff từ `HELM_DIFF_URL`, helm-drift từ `HELM_DRIFT_URL` vào `/opt/helm/plugins`. Mạng nội bộ thì đặt các biến `KAGENT_HELM_URL`, `KAGENT_HELM_DIFF_URL`, `KAGENT_HELM_DRIFT_URL` trỏ mirror. Đặt rỗng thì bỏ qua; công cụ sẽ báo "chưa cài" khi được gọi.
 
-### Helm 2 (Tiller)
-
-Kết nối đặt `helm_version: 2` thì ba công cụ helm_* chạy `helm2` với cú pháp helm 2. Mức rủi ro và cách phân lệnh giữ nguyên.
-
-- **Tiller:** namespace lấy từ `tiller_namespace` (mặc định kube-system). Tiller bật TLS thì điền `tiller_client_cert` + `tiller_client_key`, thêm `tiller_ca_cert` để xác thực Tiller. Lệnh không được dùng `--tiller-namespace`, `--host`, `--home`, `--tls*`.
-- **Quyền:** helm 2 nói chuyện với Tiller qua port-forward, nên nhóm quản trị cần `pods/portforward` (và list pods) trong namespace của Tiller. Tiller làm mọi việc bằng ServiceAccount của chính nó, thường là cluster-admin, nên RBAC của nhóm quản trị **không** giới hạn được release được cài vào đâu.
-- **Cú pháp:** `inspect` (gõ `show` cũng được), `delete --purge` (gõ `uninstall` cũng được), `install CHART --name REL --namespace NS`. `-n` là `--name`, không phải namespace. Không có `oci://`, `template` (helm 2 chỉ render chart trên máy), `get metadata`, helm-drift.
-- **Hoàn tác:** như helm 3; release vừa cài thì hoàn tác bằng `delete --purge`. install không có `--name` thì không hoàn tác được.
-- **Mạng:** client-go của helm 2 không hiểu `tls-server-name` và `proxy-url`. Vì vậy kubeconfig tạm trỏ theo tên máy của API server: IP vẫn được kiểm tra trước khi chạy nhưng không ghim được, nên không chống được DNS rebinding. Proxy của API server truyền qua `HTTPS_PROXY`, dùng chung cho cả việc tải chart.
 
 ## OpenStack
 

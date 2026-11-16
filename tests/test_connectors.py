@@ -232,7 +232,7 @@ def test_member_creates_personal_connection_private_to_them(users):
     r = new_k8s(alice)
     assert r.status_code == 200, r.text
     c = r.json()
-    assert c["personal"] and c["secrets_set"] == {"kubeconfig": False, "token": True, "tiller_client_key": False} and fakes.K8S_TOKEN not in r.text
+    assert c["personal"] and c["secrets_set"] == {"kubeconfig": False, "token": True} and fakes.K8S_TOKEN not in r.text
     tools_ = {t["tool"]: t for t in c["tools"]}
     assert tools_["my_k8s.kubectl_read"]["enabled"] == 1 and tools_["my_k8s.kubectl_write"]["enabled"] == 0  # ghi mặc định tắt
     assert all(x["name"] != "my_k8s" for x in bob.get("/api/connections").json())
@@ -263,7 +263,7 @@ def test_shared_connection_requires_admin(users):
     assert new_k8s(users["alice"], scope="tenant", name="shared_k8s").status_code == 403
     assert new_k8s(users["admin"], scope="tenant", name="shared_k8s").status_code == 200
     c = next(x for x in users["alice"].get("/api/connections").json() if x["name"] == "shared_k8s")
-    assert c["can_manage"] is False and c["secrets_set"] == {"kubeconfig": False, "token": True, "tiller_client_key": False}
+    assert c["can_manage"] is False and c["secrets_set"] == {"kubeconfig": False, "token": True}
     assert users["alice"].patch(f"/api/connections/{c['id']}", json={"title": "x"}).status_code == 403
     assert users["alice"]._call("DELETE", f"/api/connections/{c['id']}").status_code == 403
 
