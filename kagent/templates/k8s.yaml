@@ -16,7 +16,7 @@ tools:
   # Ba công cụ kubectl chạy bằng ServiceAccount riêng của từng nhóm quyền, do kagent tạo trong cụm (Công cụ → Kết nối → Quyền Kubernetes).
   # RBAC của cụm là giới hạn thật; mức rủi ro của công cụ khớp với nhóm quyền nên không cần đọc lệnh để đoán.
   - name: kubectl_read
-    description: "Chạy lệnh kubectl chỉ đọc (get, describe, logs, top, events, explain, auth can-i, rollout status/history...) bằng quyền nhóm đọc. Ví dụ command: get pods -n app -o wide"
+    description: "Chạy lệnh kubectl chỉ đọc (get, describe, logs, top, events, explain, auth can-i, rollout status/history...) bằng quyền nhóm đọc. Ví dụ command: get pods -n app -o wide. Lọc kết quả được bằng | grep [-i -v -E -F -w -c], | head -n N, | tail -n N, | wc -l (kagent tự lọc, không có shell)"
     handler: kubectl:run_read
     trusted_when: kubectl:trusted_output
     action_class: read
@@ -25,7 +25,7 @@ tools:
     untrusted_output: true
     input_schema:
       properties:
-        command: {type: string, description: "Lệnh kubectl không kèm chữ kubectl, flag đặt sau lệnh con, flag ngắn viết tách (-n app)"}
+        command: {type: string, description: "Lệnh kubectl không kèm chữ kubectl, flag đặt sau lệnh con, flag ngắn viết tách (-n app); có thể nối | grep/head/tail/wc -l"}
         timeout_seconds: {type: integer}
       required: [command]
 

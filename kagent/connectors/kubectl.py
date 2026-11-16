@@ -60,6 +60,119 @@ def _check_output(value: str) -> None:
         _fail("không đọc template từ file trên máy chủ kagent; dùng -o jsonpath=... hoặc -o go-template=... viết thẳng trong lệnh")
 
 
+SHELL_OPS = {";", "&", "&&", "||", ">", ">>", "<", "<<", "2>", "2>&1", "&>", "$(", "`"}
+FILTERS_HELP = "sau | chỉ hỗ trợ grep [-i -v -E -F -w -c] [-e] mẫu, head -n N, tail -n N, wc -l (kagent tự lọc, không chạy shell)"
+
+
+def _split_pipeline(argv: list[str]) -> tuple[list[str], list[list[str]]]:
+    """Model hay viết `... | grep -i x` như trong shell. Không có shell nên tự lọc stdout; toán tử shell khác thì báo rõ thay vì để kubectl hiểu nhầm là tên tài nguyên."""
+    cut = argv.index("--") if "--" in argv else len(argv)  # sau -- là lệnh chạy trong pod
+    for a in argv[:cut]:
+        if a in SHELL_OPS or a.startswith((">", "<", "2>", "&>", "$(", "`")):
+            _fail(f"không hỗ trợ toán tử shell {a}; mỗi lần gọi chạy một lệnh kubectl, lọc bằng -l, --field-selector, -o jsonpath=... hoặc | grep")
+    if "|" not in argv[:cut]:
+        return argv, []
+    parts, cur = [], []
+    for a in argv[:cut]:
+        if a == "|":
+            parts.append(cur)
+            cur = []
+        else:
+            cur.append(a)
+    parts.append(cur)
+    if cut < len(argv):
+        _fail("không lọc | được khi lệnh có -- (exec, run)")
+    return parts[0], parts[1:]
+
+
+def _count(value: str) -> int:
+    if not value.isdigit():
+        _fail(f"số dòng không hợp lệ: {value}; {FILTERS_HELP}")
+    return int(value)
+
+
+def _bre(pattern: str) -> str:
+    """grep không -E dùng regex cơ bản: \\| \\( \\+ ... mới là toán tử, | ( + đứng trần là ký tự thường."""
+    out, i = [], 0
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\" and i + 1 < len(pattern) and pattern[i + 1] in "|(){}+?":
+            out.append(pattern[i + 1])
+            i += 2
+            continue
+        out.append("\\" + c if c in "|(){}+?" else c)
+        if c == "\\" and i + 1 < len(pattern):
+            out.append(pattern[i + 1])
+            i += 1
+        i += 1
+    return "".join(out)
+
+
+def _filter(stage: list[str]) -> tuple:
+    if not stage:
+        _fail(f"thiếu lệnh sau |; {FILTERS_HELP}")
+    name, args = stage[0], stage[1:]
+    if name in ("head", "tail"):
+        if not args:
+            return (name, 10)
+        if len(args) == 2 and args[0] == "-n":
+            return (name, _count(args[1]))
+        if len(args) == 1 and args[0].startswith("-n"):
+            return (name, _count(args[0][2:]))
+        if len(args) == 1 and args[0].startswith("-"):
+            return (name, _count(args[0][1:]))
+        _fail(FILTERS_HELP)
+    if name == "wc":
+        if args != ["-l"]:
+            _fail(FILTERS_HELP)
+        return ("wc", 0)
+    if name not in ("grep", "egrep"):
+        _fail(f"không chạy được {name}; {FILTERS_HELP}")
+    flags, patterns, i = set("E" if name == "egrep" else ""), [], 0
+    while i < len(args):
+        a = args[i]
+        if a == "-e":
+            if i + 1 >= len(args):
+                _fail("grep -e thiếu mẫu")
+            patterns.append(args[i + 1])
+            i += 2
+            continue
+        if a.startswith("-") and len(a) > 1 and not patterns:
+            bad = set(a[1:]) - set("ivEFwc")
+            if bad:
+                _fail(f"grep -{''.join(sorted(bad))} không hỗ trợ; {FILTERS_HELP}")
+            flags |= set(a[1:])
+        else:
+            patterns.append(a)
+        i += 1
+    if not patterns:
+        _fail(f"grep thiếu mẫu; {FILTERS_HELP}")
+    parts = [re.escape(p) if "F" in flags else p if "E" in flags else _bre(p) for p in patterns]
+    if "w" in flags:
+        parts = [rf"(?<!\w)(?:{p})(?!\w)" for p in parts]
+    try:
+        rx = re.compile("|".join(f"(?:{p})" for p in parts), re.IGNORECASE if "i" in flags else 0)
+    except re.error as exc:
+        _fail(f"mẫu grep không hợp lệ: {exc}")
+    return ("grep", rx, "v" in flags, "c" in flags)
+
+
+def _apply_filters(text: str, filters: list[tuple]) -> str:
+    lines = text.splitlines()
+    for f in filters:
+        if f[0] == "grep":
+            lines = [line for line in lines if bool(f[1].search(line)) != f[2]]
+            if f[3]:
+                lines = [str(len(lines))]
+        elif f[0] == "head":
+            lines = lines[:f[1]]
+        elif f[0] == "tail":
+            lines = lines[-f[1]:] if f[1] else []
+        else:
+            lines = [str(len(lines))]
+    return "".join(line + "\n" for line in lines)
+
+
 def _lowest(sub: str, action: str | None) -> str:
     """Nhóm thấp nhất được chạy lệnh này."""
     if action is not None and sub in ACTIONS:
@@ -78,6 +191,8 @@ def parse(command, profile: str) -> tuple[list[str], dict]:
         _fail(f"lệnh không hợp lệ: {exc}")
     if argv and argv[0] == "kubectl":
         argv = argv[1:]
+    argv, stages = _split_pipeline(argv)
+    filters = [_filter(stage) for stage in stages]
     if not argv or argv[0].startswith("-"):
         _fail("lệnh phải bắt đầu bằng lệnh con của kubectl, flag đặt phía sau, ví dụ: get pods -n app")
     sub = argv[0]
@@ -127,7 +242,11 @@ def parse(command, profile: str) -> tuple[list[str], dict]:
         i += 1
     key = f"{sub} {action}" if action else sub
     read_only = need == "read" or sub == "diff"
-    return argv, {"sub": sub, "action": action, "key": key, "stdin": stdin, "read_only": read_only, "dry_run": key in DRY_RUN or sub in DRY_RUN and sub not in ACTIONS}
+    if filters and not read_only:
+        _fail("chỉ lệnh đọc mới được lọc qua | grep/head/tail")
+    return argv, {"sub": sub, "action": action, "key": key, "stdin": stdin, "read_only": read_only, "filters": filters,
+                  "pipe": " | ".join(shlex.join(stage) for stage in stages),
+                  "dry_run": key in DRY_RUN or sub in DRY_RUN and sub not in ACTIONS}
 
 
 def kubeconfig(p: dict, token: str) -> str:
@@ -238,12 +357,22 @@ def _run(p: dict, args: dict, profile: str, dry: bool = False) -> dict:
         argv = _with_dry_run(argv)
     timeout = integer(args, "timeout_seconds", 30, 1, 120)
     code, out, err, timed_out = _exec(argv, kubeconfig(p, _token(p, profile)), manifest, timeout, interruptible=info["read_only"] or dry)
-    result = {"command": "kubectl " + shlex.join(argv), "exit_code": code, "stdout": clip(out), "stderr": clip(err, 5000)}
+    command = "kubectl " + shlex.join(argv)
+    if info["filters"]:
+        command += " | " + info["pipe"]
+        out = _apply_filters(out, info["filters"])
+    result = {"command": command, "exit_code": code, "stdout": clip(out), "stderr": clip(err, 5000)}
     if timed_out:
         result["timed_out"] = True
     elif code != 0 and not (info["key"] in LENIENT and code == 1):
-        _fail(f"kubectl lỗi (mã {code}): {clip(_error_text(err or out), 1500)}")
+        text = _error_text(err or out)
+        if "across all namespaces" in text:
+            text += "\nGợi ý: bỏ -A và dùng -n <namespace>; chưa biết namespace thì get <loại> -A --field-selector=metadata.name=<tên>"
+        _fail(f"kubectl lỗi (mã {code}): {clip(text, 1500)}")
+    if info["filters"] and not out:
+        result["note"] = "không có dòng nào khớp bộ lọc"
     return result
+
 
 
 def run_read(p, args):

@@ -153,6 +153,58 @@ def test_check_runs_server_dry_run(calls):
         kubectl.check_admin(p, {"command": "exec web-0 -- env"})
 
 
+PODS = "NAME READY STATUS\netcd-a 1/1 Running\nEtcd-b 0/1 Pending\napi-x 1/1 Running\nkafka-0 1/1 Running\n"
+
+
+@pytest.mark.parametrize("pipe, expected", [
+    ("grep -i etcd", "etcd-a 1/1 Running\nEtcd-b 0/1 Pending\n"),
+    ("grep etcd", "etcd-a 1/1 Running\n"),
+    ("grep -iE 'etcd|kafka' | grep -v Pending", "etcd-a 1/1 Running\nkafka-0 1/1 Running\n"),
+    ("grep 'api\\|kafka'", "api-x 1/1 Running\nkafka-0 1/1 Running\n"),
+    ("grep -F 1/1 | wc -l", "3\n"),
+    ("grep -c -e Pending -e api", "2\n"),
+    ("grep -w etc", ""),
+    ("tail -n 2 | head -1", "api-x 1/1 Running\n"),
+    ("head -2", "NAME READY STATUS\netcd-a 1/1 Running\n"),
+])
+def test_pipe_filters_stdout_without_shell(calls, pipe, expected):
+    calls.replies.append((0, PODS, "", False))
+    out = kubectl.run_read({**ADMIN_P, "_sa_read": "r"}, {"command": f"get pods -A -o wide | {pipe}"})
+    assert calls.seen[-1]["argv"][3:] == ["get", "pods", "-A", "-o", "wide"]
+    assert out["stdout"] == expected and out["command"].startswith("kubectl get pods -A -o wide | ")
+    assert ("note" in out) == (expected == "")
+
+
+@pytest.mark.parametrize("command, message", [
+    ("get pods | sort", "không chạy được sort"),
+    ("get pods | grep -P x", "grep -P không hỗ trợ"),
+    ("get pods | grep", "grep thiếu mẫu"),
+    ("get pods |", "thiếu lệnh sau"),
+    ("get pods | head -n x", "số dòng không hợp lệ"),
+    ("get pods | grep -E '('", "mẫu grep không hợp lệ"),
+    ("get pods ; delete pod x", "toán tử shell ;"),
+    ("get pods > /tmp/x", "toán tử shell >"),
+    ("get pods 2>/dev/null", "toán tử shell 2>"),
+    ("get pods && get svc", "toán tử shell &&"),
+])
+def test_pipe_rejects_unsupported(command, message):
+    with pytest.raises(ConnectorError, match=message):
+        kubectl.parse(command, "read")
+
+
+def test_pipe_only_for_read_commands():
+    with pytest.raises(ConnectorError, match="chỉ lệnh đọc"):
+        kubectl.parse("scale deploy/web --replicas=2 | grep web", "write")
+    argv, _ = kubectl.parse("exec web-0 -- sh -c 'ps | grep java'", "admin")
+    assert argv[-1] == "ps | grep java"
+
+
+def test_all_namespaces_by_name_error_gets_hint(calls):
+    calls.replies.append((1, "", "error: a resource cannot be retrieved by name across all namespaces", False))
+    with pytest.raises(ConnectorError, match="field-selector=metadata.name"):
+        kubectl.run_read({**ADMIN_P, "_sa_read": "r"}, {"command": "get pod etcd-a -A"})
+
+
 # ---------- cấu hình nhóm quyền ----------
 
 @pytest.mark.parametrize("cfg, message", [

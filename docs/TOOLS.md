@@ -171,6 +171,7 @@ kagent vẫn chặn những gì RBAC không chặn được:
 - Không đổi danh tính hay đích đến: chặn `--as`, `--token`, `--server`/`-s`, `--kubeconfig`, `--context`, `--username`/`--password`.
 - Không lộ token (`-v`) và không chạy kéo dài: chặn `-i`, `-t`, `--watch`, `logs -f`.
 - Flag ngắn chỉ dùng `-n -l -c -o -L -p -A -h -f`, viết tách (`-n app`); các flag khác viết dạng dài.
+- Không có shell. Lệnh đọc được nối `| grep [-i -v -E -F -w -c] [-e] mẫu`, `| head -n N`, `| tail -n N`, `| wc -l`; kagent tự lọc stdout bằng Python. Các toán tử shell khác (`;`, `&&`, `>`, `$(`...) bị từ chối với thông báo rõ ràng, không để kubectl hiểu nhầm thành tên tài nguyên.
 
 Cách chạy kubectl:
 
