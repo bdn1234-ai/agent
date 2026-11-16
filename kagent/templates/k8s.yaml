@@ -12,6 +12,11 @@ fields:
   - {name: verify_tls, type: boolean, default: true, description: Kiểm tra chứng chỉ TLS}
   - {name: namespace, type: string, default: default, description: "Namespace mặc định của kubectl khi lệnh không có -n"}
   - {name: proxy, type: string, default: auto, description: "auto = theo file PAC ở Cài đặt → Proxy; none = đi thẳng; hoặc http://host:port"}
+  - {name: helm_version, type: string, default: "3", description: "Phiên bản helm của cụm cho công cụ helm_*: 3, hoặc 2 nếu cụm còn dùng Tiller"}
+  - {name: tiller_namespace, type: string, default: kube-system, description: "Chỉ helm 2: namespace chạy Tiller"}
+  - {name: tiller_ca_cert, type: text, description: "Chỉ helm 2: CA (PEM) để xác thực Tiller khi Tiller bật TLS"}
+  - {name: tiller_client_cert, type: text, description: "Chỉ helm 2: chứng chỉ client (PEM) khi Tiller bật TLS; điền kèm tiller_client_key"}
+  - {name: tiller_client_key, type: secret_text, description: "Chỉ helm 2: khoá riêng (PEM) của chứng chỉ client tới Tiller"}
 tools:
   # Ba công cụ kubectl chạy bằng ServiceAccount riêng của từng nhóm quyền, do kagent tạo trong cụm (Công cụ → Kết nối → Quyền Kubernetes).
   # RBAC của cụm là giới hạn thật; mức rủi ro của công cụ khớp với nhóm quyền nên không cần đọc lệnh để đoán.
@@ -71,7 +76,7 @@ tools:
 
   # Helm lưu release trong Secret nên ba công cụ helm_* đều chạy bằng ServiceAccount nhóm quản trị; kagent tự phân lệnh theo nội dung (xem helm.py).
   - name: helm_read
-    description: "Chạy lệnh helm chỉ đọc: list, status, history, show chart/values/readme, template, get notes/metadata, diff upgrade/rollback/revision/release (plugin helm-diff, giá trị Secret bị che), drift run/all (plugin helm-drift, so release với trạng thái thật trong cụm). Chart lấy từ oci://, https://.../chart.tgz hoặc tên chart kèm --repo URL. Ví dụ: drift run web -n app --from-release. Cần nhóm quản trị đã áp dụng"
+    description: "Chạy lệnh helm chỉ đọc: list, status, history, show chart/values/readme, template, get notes/metadata, diff upgrade/rollback/revision/release (plugin helm-diff, giá trị Secret bị che), drift run/all (plugin helm-drift, so release với trạng thái thật trong cụm, chỉ helm 3). Chart lấy từ oci://, https://.../chart.tgz hoặc tên chart kèm --repo URL. Ví dụ: drift run web -n app --from-release. Kết nối đặt helm_version 2 thì dùng cú pháp helm 2 (inspect, --namespace; -n là --name; không có oci://). Cần nhóm quản trị đã áp dụng"
     handler: helm:run_read
     trusted_when: helm:trusted_output
     action_class: read
@@ -86,7 +91,7 @@ tools:
       required: [command]
 
   - name: helm_write
-    description: "Chạy helm install, upgrade (kể cả --install), rollback. Luôn chạy thử bằng helm diff trước; hoàn tác bằng helm rollback về revision trước, hoặc gỡ release vừa cài. Chart lấy từ oci://, https://.../chart.tgz hoặc tên chart kèm --repo URL; values truyền qua tham số values với -f -"
+    description: "Chạy helm install, upgrade (kể cả --install), rollback; cú pháp theo helm_version của kết nối (helm 2: install CHART --name REL --namespace NS). Luôn chạy thử bằng helm diff trước; hoàn tác bằng helm rollback về revision trước, hoặc gỡ release vừa cài. Chart lấy từ oci://, https://.../chart.tgz hoặc tên chart kèm --repo URL; values truyền qua tham số values với -f -"
     handler: helm:run_write
     check: helm:check_write
     action_class: write
@@ -105,7 +110,7 @@ tools:
       required: [command]
 
   - name: helm_admin
-    description: "Chạy helm uninstall, test, get values/manifest/hooks/all, diff --show-secrets và mọi lệnh của helm_write, helm_read. Kết quả có thể chứa Secret. Luôn cần duyệt"
+    description: "Chạy helm uninstall (helm 2: delete --purge), test, get values/manifest/hooks/all, diff --show-secrets và mọi lệnh của helm_write, helm_read. Kết quả có thể chứa Secret. Luôn cần duyệt"
     handler: helm:run_admin
     check: helm:check_admin
     action_class: destructive

@@ -78,8 +78,10 @@ def _conn(p) -> dict:
 
 
 def validate_params(p) -> None:
+    from . import helm
     c = _conn(p)
     net.check_url(c["api_url"], c["allow_private"])
+    helm.validate_params(p)
 
 
 IDENTITIES = ("read", "write", "admin")

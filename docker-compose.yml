@@ -8,10 +8,12 @@ services:
         PIP_INDEX_URL: ${KAGENT_PIP_INDEX_URL:-https://pypi.org/simple}
         PIP_TRUSTED_HOST: ${KAGENT_PIP_TRUSTED_HOST:-pypi.org}
         KUBECTL_URL: ${KAGENT_KUBECTL_URL:-https://dl.k8s.io/release/v1.29.3/bin/linux/amd64/kubectl}
-        HELM_URL: ${KAGENT_HELM_URL-https://get.helm.sh/helm-v3.16.4-linux-amd64.tar.gz}
+        HELM_URL: ${KAGENT_HELM_URL-https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz}
         # "-" chứ không phải ":-": đặt rỗng trong .env là bỏ qua khi mirror chưa có.
         HELM_DIFF_URL: ${KAGENT_HELM_DIFF_URL-https://github.com/databus23/helm-diff/releases/download/v3.15.15/helm-diff-linux-amd64.tgz}
         HELM_DRIFT_URL: ${KAGENT_HELM_DRIFT_URL-https://github.com/nikhilsbhat/helm-drift/releases/download/v0.1.2/helm-drift_0.1.2_linux_x86_64.tar.gz}
+        HELM2_URL: ${KAGENT_HELM2_URL-https://get.helm.sh/helm-v2.17.0-linux-amd64.tar.gz}
+        HELM2_DIFF_URL: ${KAGENT_HELM2_DIFF_URL-https://github.com/databus23/helm-diff/releases/download/v3.7.0/helm-diff-linux-amd64.tgz}
     image: kagent:local
     restart: unless-stopped
     ports:

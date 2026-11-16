@@ -184,7 +184,7 @@ def test_check_write_uses_helm_diff(calls):
 
 
 def test_check_without_diff_plugin_hides_manifest(calls, monkeypatch):
-    monkeypatch.setattr(helm, "_diff_installed", lambda: False)
+    monkeypatch.setattr(helm, "_installed", lambda ver, plugin: False)
     calls.replies.append((0, "kind: Secret\ndata:\n  password: c2VjcmV0\n", "", False))
     out = helm.check_write(P, {"command": "upgrade web oci://example.test/charts/web"})
     assert calls.seen[0]["argv"][-1] == "--dry-run=server" and "c2VjcmV0" not in json.dumps(out) and "helm-diff" in out["note"]
@@ -254,3 +254,85 @@ def test_not_reversible(calls, tool, command, why):
 def test_read_command_through_write_tool_is_noop(calls):
     plan = helm_undo.plan_undo(P, "helm_write", {"command": "status web"})
     assert plan["noop"] and not calls.seen
+
+
+# ---------- helm 2 (Tiller) ----------
+
+P2 = {**P, "helm_version": "2", "tiller_namespace": "tiller"}
+
+
+@pytest.mark.parametrize("command, profile", [
+    ("list --namespace app", "read"), ("inspect values web --repo https://example.test/charts", "read"), ("show chart https://example.test/web-1.0.0.tgz", "read"),
+    ("get notes web", "read"), ("diff upgrade web https://example.test/web-1.0.0.tgz", "read"),
+    ("install https://example.test/web-1.0.0.tgz --name web --namespace app -f -", "write"), ("install web --repo https://example.test/charts -n web", "write"),
+    ("upgrade web https://example.test/web-1.0.0.tgz", "write"), ("rollback web 3", "write"),
+    ("delete web --purge", "admin"), ("uninstall web", "admin"), ("get manifest web", "admin"),
+])
+def test_v2_parse_accepts(command, profile):
+    helm.parse(command, profile, ver="2")
+
+
+@pytest.mark.parametrize("command, profile, message", [
+    ("drift run web", "read", "chỉ chạy với helm 3"),
+    ("show chart oci://example.test/web", "read", "không hỗ trợ chart"),
+    ("list --tiller-namespace kube-system", "read", "Tiller cấu hình ở kết nối"),
+    ("list --host 10.0.0.1:44134", "read", "--host"),
+    ("list --home /data", "read", "--home"),
+    ("list --tls-key /data/key", "read", "--tls-key"),
+    ("get metadata web", "read", "cần hành động"),
+    ("delete web --purge", "write", "helm_admin"),
+])
+def test_v2_parse_rejects(command, profile, message):
+    with pytest.raises(ConnectorError, match=message):
+        helm.parse(command, profile, ver="2")
+
+
+def test_v2_release_and_namespace_from_flags():
+    _, info = helm.parse("install https://example.test/web-1.0.0.tgz -n web --namespace app", "write", ver="2")
+    assert info["release"] == "web" and info["chart"] == "https://example.test/web-1.0.0.tgz" and info["namespace"] == "app"
+    _, info = helm.parse("install web oci://example.test/web -n app", "write")
+    assert info["release"] == "web" and info["namespace"] == "app"
+
+
+def test_v2_env_uses_tiller_home_and_tls(calls):
+    tls = {"tiller_client_cert": "CERT", "tiller_client_key": "KEY", "tiller_ca_cert": "CA"}
+    helm.run_write({**P2, **tls}, {"command": "upgrade web https://example.test/web-1.0.0.tgz"})
+    call = calls.seen[0]
+    env = call["env"]
+    assert call["argv"][1:] == ["upgrade", "web", "https://example.test/web-1.0.0.tgz", "--timeout=300"]
+    assert env["TILLER_NAMESPACE"] == "tiller" and env["HELM_TLS_ENABLE"] == "true" and env["HELM_TLS_VERIFY"] == "true"
+    assert env["HELM_HOME"].startswith(env["HOME"]) and env["HELM_PLUGIN"] == helm.PLUGINS2 and "HELM_NAMESPACE" not in env
+    cluster = call["config"]["clusters"][0]["cluster"]
+    assert cluster["server"] == "https://k8s.test:6443" and "tls-server-name" not in cluster  # client-go của helm 2 không biết tls-server-name
+
+
+def test_v2_api_proxy_goes_to_env(calls, monkeypatch):
+    from kagent import proxy
+    monkeypatch.setattr(proxy, "routes", lambda url, mode=None: ["http://proxy.test:3128"])
+    helm.run_read(P2, {"command": "list"})
+    call = calls.seen[0]
+    assert "proxy-url" not in call["config"]["clusters"][0]["cluster"] and call["env"]["HTTPS_PROXY"] == "http://proxy.test:3128"
+    assert "NO_PROXY" not in call["env"]
+
+
+def test_v2_check_and_undo(calls):
+    helm.check_write(P2, {"command": "install https://example.test/web-1.0.0.tgz --name web --namespace app --wait"})
+    assert calls.seen[0]["argv"][1:] == ["diff", "upgrade", "web", "https://example.test/web-1.0.0.tgz", "--allow-unreleased", "--namespace", "app",
+                                         "--no-color"]
+    calls.replies.append((1, "", 'Error: release: "web" not found', False))
+    plan = helm_undo.plan_undo(P2, "helm_write", {"command": "install https://example.test/web-1.0.0.tgz --name web --namespace app"})
+    assert calls.seen[1]["argv"][1:] == ["history", "web", "--max", "1", "-o", "json"]
+    assert plan["undo"][0]["argv"] == ["delete", "web", "--purge"]
+    calls.replies.append((0, history(2, status="DEPLOYED"), "", False))
+    plan = helm_undo.plan_undo(P2, "helm_write", {"command": "upgrade web https://example.test/web-1.0.0.tgz"})
+    assert plan["undo"][0]["argv"] == ["rollback", "web", "2"] and "preflight" not in plan
+    plan = helm_undo.plan_undo(P2, "helm_write", {"command": "install https://example.test/web-1.0.0.tgz"})
+    assert plan["reversible"] is False and "tên release" in plan["why"]
+
+
+def test_v2_validate_params():
+    helm.validate_params(P2)
+    with pytest.raises(ConnectorError, match="3 hoặc 2"):
+        helm.validate_params({**P, "helm_version": "4"})
+    with pytest.raises(ConnectorError, match="cùng nhau"):
+        helm.validate_params({**P2, "tiller_client_cert": "C"})
