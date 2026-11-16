@@ -113,7 +113,7 @@ function go(tab, conversationId, sub) {
   renderShell();
 }
 
-// Thanh tab con trong một mục (vd Tri thức: Tra cứu / Đơn vị tri thức / Biên dịch). Tab con nằm trên URL nên refresh giữ nguyên.
+// Thanh tab con trong một mục (vd Tri thức: Đồ thị / Tri thức / Runbook). Tab con nằm trên URL nên refresh giữ nguyên.
 async function subTabs(main, tabs) {
   const key = tabs.some(([k]) => k === state.sub) ? state.sub : tabs[0][0];
   const body = h("div");
@@ -773,7 +773,7 @@ async function compiledView(main) {
   const domain = h("select", { "aria-label": "Loại nhiệm vụ" }, ["k8s_ops", "observability", "docs", "research", "general"].map((x) => h("option", {}, x)));
   const terms = h("input", { placeholder: "Từ khóa kỳ vọng, cách nhau dấu phẩy", "aria-label": "Từ khóa kỳ vọng" });
   const addGolden = guard(async () => { await api("POST", "/api/golden", { query: query.value, expect_domain: domain.value, expect_terms: terms.value.split(",").map((s) => s.trim()).filter(Boolean) }); renderShell(); });
-  main.append(h("h2", {}, "Tri thức biên dịch (L2)"), isAdmin() && h("div", { class: "row" }, h("button", { onclick: compile }, "Biên dịch ngay"), h("button", { class: "danger", onclick: rollback }, "Hoàn tác publish gần nhất")),
+  main.append(h("h2", {}, "Runbook (L2)"), isAdmin() && h("div", { class: "row" }, h("button", { onclick: compile }, "Biên dịch ngay"), h("button", { class: "danger", onclick: rollback }, "Hoàn tác publish gần nhất")),
     h("div", { class: "split", style: null }, h("div", { class: "card filelist" }, h("h3", {}, "File"), files.length ? files.map((f) => h("button", { onclick: show(f) }, f)) : "Chưa có file."), h("div", { class: "card" }, h("h3", {}, "Nội dung"), viewer)),
     pendingSection(runs.find((r) => r.status === "pending_review")), autoPublishedSection(runs),
     h("h2", {}, "Lịch sử publish"), runs.filter((r) => r.status !== "pending_review").length ? h("div", { class: "card scroll" }, h("table", {}, h("tbody", {},
@@ -1433,8 +1433,8 @@ async function toolCatalogView(main) {
 }
 
 VIEWS.tools = (main) => subTabs(main, [["connections", "Kết nối", connectionsView], ["catalog", "Danh mục & quyền", toolCatalogView]]);
-VIEWS.knowledge = (main) => subTabs(main, [["graph", "Tra cứu (L3)", knowledgeGraphView], ["units", "Đơn vị tri thức (L1)", knowledgeUnitsView],
-  ["compiled", "Biên dịch (L2)", compiledView]]);
+VIEWS.knowledge = (main) => subTabs(main, [["graph", "Đồ thị (L3)", knowledgeGraphView], ["units", "Tri thức (L1)", knowledgeUnitsView],
+  ["compiled", "Runbook (L2)", compiledView]]);
 
 const PURPOSE = { agent: "Agent trả lời", route: "Router", check_plan: "Kiểm tra độc lập", reflect: "Reflector", curate: "Curator", judge: "Chấm kết quả", other: "Khác" };
 const num = (v) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("vi-VN"));

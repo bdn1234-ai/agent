@@ -254,7 +254,7 @@ Số đo trên lượt thật "có bao nhiêu lỗi ERROR trong log svc-backend 
 
 ## Đợt 32 — 2026-11-11: sắp xếp lại sidebar, tra cứu L3
 
-- **Tri thức** gộp L1, L2, L3 thành ba tab con: "Tra cứu (L3)" (mặc định), "Đơn vị tri thức (L1)", "Biên dịch (L2)".
+- **Tri thức** gộp L1, L2, L3 thành ba tab con: "Đồ thị (L3)" (mặc định), "Tri thức (L1)", "Runbook (L2)" (trước đây tên là "Tra cứu", "Đơn vị tri thức", "Biên dịch").
 - **Tra cứu (L3):** ô tra cứu dùng đúng truy xuất lai của agent (vector + BM25 + đồ thị), nên kết quả là những tri thức agent sẽ nạp cho câu hỏi đó, kèm điểm; duyệt theo thực thể; đồ thị SVG (nút tri thức tô màu theo loại, nút thực thể, cạnh gộp/mâu thuẫn) với bố cục lực tự viết vì CSP không cho tải thư viện ngoài. API `GET /api/knowledge/graph`.
 - **Công cụ** gộp "Kết nối công cụ" với danh mục công cụ và công cụ học được (tab con "Kết nối", "Danh mục & quyền").
 - **Cài đặt** gồm tab "Chính sách" (mọi người xem, admin sửa) và "LLM" (chỉ org admin). Giữ trang Duyệt lệnh.
