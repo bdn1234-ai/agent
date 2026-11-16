@@ -29,9 +29,9 @@ docker compose up -d --build
 docker compose exec kagent cat /data/initial-credentials.txt
 ```
 
-Mở `http://127.0.0.1:8000`. Dữ liệu nằm trong volume `kagent-data`. Mặc định image gốc kéo từ registry `registry.corp.test:8890`
-và pip cài qua Nexus `registry.corp.test:8081`; ngoài mạng nội bộ thì đặt trong `.env`:
-`KAGENT_BASE_IMAGE=python:3.12-bookworm`, `KAGENT_PIP_INDEX_URL=https://pypi.org/simple`, `KAGENT_PIP_TRUSTED_HOST=pypi.org`.
+Mở `http://127.0.0.1:8000`. Dữ liệu nằm trong volume `kagent-data`. Mặc định image gốc lấy từ Docker Hub, pip từ PyPI,
+kubectl từ dl.k8s.io. Mạng nội bộ không ra được Internet thì trỏ sang mirror trong `.env` (đã gitignore):
+`KAGENT_BASE_IMAGE`, `KAGENT_PIP_INDEX_URL`, `KAGENT_PIP_TRUSTED_HOST`, `KAGENT_KUBECTL_URL`.
 Các biến khác: `KAGENT_BIND=0.0.0.0` để mở cho LAN, `KAGENT_PORT`, `ANTHROPIC_API_KEY`, `KAGENT_ADMIN_PASSWORD`, `KAGENT_DEMO_PASSWORD`.
 
 ## Bật LLM

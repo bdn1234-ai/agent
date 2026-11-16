@@ -4,10 +4,10 @@ services:
     build:
       context: .
       args:
-        BASE_IMAGE: ${KAGENT_BASE_IMAGE:-registry.corp.test:8890/python:3.12-bookworm}
-        PIP_INDEX_URL: ${KAGENT_PIP_INDEX_URL:-http://registry.corp.test:8081/repository/PyPI/simple}
-        PIP_TRUSTED_HOST: ${KAGENT_PIP_TRUSTED_HOST:-registry.corp.test}
-        KUBECTL_URL: ${KAGENT_KUBECTL_URL:-http://mirror.corp.test:8084/repository/raw-hosted/kubectl}
+        BASE_IMAGE: ${KAGENT_BASE_IMAGE:-python:3.12-bookworm}
+        PIP_INDEX_URL: ${KAGENT_PIP_INDEX_URL:-https://pypi.org/simple}
+        PIP_TRUSTED_HOST: ${KAGENT_PIP_TRUSTED_HOST:-pypi.org}
+        KUBECTL_URL: ${KAGENT_KUBECTL_URL:-https://dl.k8s.io/release/v1.29.3/bin/linux/amd64/kubectl}
     image: kagent:local
     restart: unless-stopped
     ports:

@@ -1,18 +1,18 @@
 # Bản bookworm đầy đủ có sẵn git (Compiler lưu L2 trong repo git mỗi tenant), khỏi cần apt vốn không tải được từ mạng nội bộ.
-# Mặc định kéo qua registry nội bộ; ngoài mạng này: --build-arg BASE_IMAGE=python:3.12-bookworm
-ARG BASE_IMAGE=registry.corp.test:8890/python:3.12-bookworm
+# Mạng nội bộ không ra Internet thì truyền --build-arg BASE_IMAGE=<registry nội bộ>/python:3.12-bookworm
+ARG BASE_IMAGE=python:3.12-bookworm
 FROM ${BASE_IMAGE}
 
 WORKDIR /app
-# Ở mạng nội bộ, compose trỏ pip vào Nexus vì đường Internet trực tiếp tới PyPI rất chậm.
+# Mạng nội bộ có mirror PyPI thì truyền PIP_INDEX_URL/PIP_TRUSTED_HOST (compose đọc từ .env).
 ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG PIP_TRUSTED_HOST=pypi.org
 COPY requirements.txt .
 # Cache mount giữ gói đã tải giữa các lần build, vì mạng hay đứt giữa chừng.
 RUN --mount=type=cache,target=/root/.cache/pip pip install --timeout 120 --retries 10 -r requirements.txt
-# kubectl cho công cụ kubectl_* của template k8s. Lấy từ Nexus nội bộ vì không tải được trực tiếp; ngoài mạng này truyền URL bản chính thức
-# (https://dl.k8s.io/release/v1.29.3/bin/linux/amd64/kubectl). Đặt trước COPY mã để đổi mã không phải tải lại 50MB.
-ARG KUBECTL_URL=http://mirror.corp.test:8084/repository/raw-hosted/kubectl
+# kubectl cho công cụ kubectl_* của template k8s; mạng không tải được dl.k8s.io thì truyền KUBECTL_URL trỏ mirror nội bộ.
+# Đặt trước COPY mã để đổi mã không phải tải lại 50MB.
+ARG KUBECTL_URL=https://dl.k8s.io/release/v1.29.3/bin/linux/amd64/kubectl
 ADD ${KUBECTL_URL} /usr/local/bin/kubectl
 RUN chmod 755 /usr/local/bin/kubectl && kubectl version --client
 COPY kagent ./kagent

@@ -147,7 +147,7 @@ Cách chạy kubectl:
 
 - Mỗi lần chạy, kagent tạo kubeconfig tạm (quyền 600) trỏ thẳng vào IP đã được lớp mạng kiểm tra, kèm `tls-server-name` là tên máy gốc. Nhờ vậy vẫn chặn mạng nội bộ khi chưa được phép và chống DNS rebinding.
 - kubectl chạy với env sạch, `HOME` tạm, timeout 1-120 giây (mặc định 30).
-- Image cài kubectl từ `KUBECTL_URL` (build arg, mặc định trỏ Nexus nội bộ). Ngoài mạng nội bộ, đặt `KAGENT_KUBECTL_URL` cho docker compose, hoặc cài kubectl vào PATH (biến `KAGENT_KUBECTL` để chỉ đường dẫn khác).
+- Image cài kubectl từ `KUBECTL_URL` (build arg, mặc định dl.k8s.io). Mạng nội bộ không tải được thì đặt `KAGENT_KUBECTL_URL` trỏ mirror cho docker compose, hoặc cài kubectl vào PATH (biến `KAGENT_KUBECTL` để chỉ đường dẫn khác).
 
 ## OpenStack
 
