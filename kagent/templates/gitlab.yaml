@@ -1,0 +1,244 @@
+template: gitlab
+title: GitLab
+description: "GitLab REST API v4: dự án, pipeline, job và log, merge request, commit, deployment, issue; chạy lại hoặc huỷ pipeline, chạy job manual, comment. Quyền thật là scope và role của access token."
+ping: gitlab:ping
+fields:
+  - {name: url, type: url, required: true, description: "Địa chỉ GitLab, ví dụ https://gitlab.example.com"}
+  - {name: token, type: secret, required: true, description: "Personal, project hoặc group access token. Chỉ đọc: scope read_api; dùng công cụ ghi: scope api với role Developer trở lên"}
+  - {name: default_project, type: string, description: "Dự án mặc định (ID hoặc nhom/du-an) khi agent không nêu project"}
+  - {name: verify_tls, type: boolean, default: true}
+  - {name: ca_cert, type: text, description: Chứng chỉ CA dạng PEM nếu dùng CA riêng}
+  - {name: proxy, type: string, default: auto, description: "auto = theo file PAC ở Cài đặt → Proxy; none = đi thẳng; hoặc http://host:port"}
+tools:
+  # project nhận ID hoặc đường dẫn nhom/du-an; bỏ trống thì dùng default_project của kết nối.
+  - name: list_projects
+    description: Tìm dự án token truy cập được theo tên, mới hoạt động gần nhất trước
+    handler: gitlab:list_projects
+    action_class: read
+    data_sensitivity: internal
+    input_schema:
+      properties:
+        search: {type: string}
+        limit: {type: integer}
+
+  - name: list_pipelines
+    description: Pipeline gần nhất của dự án, lọc theo ref (nhánh, tag), status (failed, running, success...), source (push, schedule, merge_request_event...)
+    handler: gitlab:list_pipelines
+    action_class: read
+    data_sensitivity: internal
+    input_schema:
+      properties:
+        project: {type: string}
+        ref: {type: string}
+        status: {type: string}
+        source: {type: string}
+        limit: {type: integer}
+
+  - name: get_pipeline
+    description: Chi tiết một pipeline kèm các job (stage, trạng thái, lý do lỗi, job manual)
+    handler: gitlab:get_pipeline
+    action_class: read
+    data_sensitivity: internal
+    input_schema:
+      properties:
+        project: {type: string}
+        pipeline_id: {type: integer}
+      required: [pipeline_id]
+
+  - name: job_log
+    description: Log của một job (đã bỏ mã màu), lấy tail_lines dòng cuối (mặc định 200); contains lọc dòng chứa chuỗi
+    handler: gitlab:job_log
+    action_class: read
+    data_sensitivity: confidential
+    untrusted_output: true
+    input_schema:
+      properties:
+        project: {type: string}
+        job_id: {type: integer}
+        tail_lines: {type: integer}
+        contains: {type: string}
+      required: [job_id]
+
+  - name: list_deployments
+    description: Lần deploy gần nhất theo environment (production, staging...) kèm ref, commit, người chạy, job; dùng để biết gần đây deploy gì khi có sự cố
+    handler: gitlab:list_deployments
+    action_class: read
+    data_sensitivity: internal
+    input_schema:
+      properties:
+        project: {type: string}
+        environment: {type: string}
+        status: {type: string, description: "success, failed, running, canceled..."}
+        limit: {type: integer}
+
+  - name: list_commits
+    description: Commit gần nhất trên một ref, lọc từ thời điểm since (ISO 8601) hoặc theo path
+    handler: gitlab:list_commits
+    action_class: read
+    data_sensitivity: internal
+    untrusted_output: true
+    input_schema:
+      properties:
+        project: {type: string}
+        ref: {type: string}
+        since: {type: string}
+        path: {type: string}
+        limit: {type: integer}
+
+  - name: list_merge_requests
+    description: Merge request theo state (opened mặc định, merged, closed, all), nhánh đích, từ khoá
+    handler: gitlab:list_merge_requests
+    action_class: read
+    data_sensitivity: internal
+    untrusted_output: true
+    input_schema:
+      properties:
+        project: {type: string}
+        state: {type: string, enum: [opened, closed, merged, locked, all]}
+        target_branch: {type: string}
+        search: {type: string}
+        limit: {type: integer}
+
+  - name: get_merge_request
+    description: Chi tiết một merge request (mô tả, trạng thái merge, pipeline); include_diff để lấy cả thay đổi từng file
+    handler: gitlab:get_merge_request
+    action_class: read
+    data_sensitivity: confidential
+    untrusted_output: true
+    input_schema:
+      properties:
+        project: {type: string}
+        mr_iid: {type: integer}
+        include_diff: {type: boolean}
+      required: [mr_iid]
+
+  - name: list_issues
+    description: Issue theo state (opened mặc định, closed, all), labels (cách nhau dấu phẩy), từ khoá
+    handler: gitlab:list_issues
+    action_class: read
+    data_sensitivity: internal
+    untrusted_output: true
+    input_schema:
+      properties:
+        project: {type: string}
+        state: {type: string, enum: [opened, closed, all]}
+        labels: {type: string}
+        search: {type: string}
+        limit: {type: integer}
+
+  - name: get_file
+    description: Nội dung một file trong repository tại ref (mặc định HEAD), ví dụ .gitlab-ci.yml, values.yaml
+    handler: gitlab:get_file
+    action_class: read
+    data_sensitivity: confidential
+    untrusted_output: true
+    input_schema:
+      properties:
+        project: {type: string}
+        path: {type: string}
+        ref: {type: string}
+      required: [path]
+
+  - name: api_read
+    description: >-
+      Gọi GET tới GitLab API v4 cho những gì công cụ trên chưa có. path tính từ /api/v4, ví dụ /projects/123/environments,
+      /projects/nhom%2Fdu-an/repository/tags, /groups/45/projects. Không đọc biến CI, token, khoá, webhook, runner
+    handler: gitlab:api_read
+    action_class: read
+    data_sensitivity: confidential
+    untrusted_output: true
+    input_schema:
+      properties:
+        path: {type: string}
+        query: {type: object}
+      required: [path]
+
+  - name: retry_pipeline
+    description: Chạy lại các job lỗi hoặc bị huỷ của một pipeline. Job deploy trong đó sẽ deploy lại
+    handler: gitlab:retry_pipeline
+    action_class: write
+    reversible: "no"
+    blast_radius: workload
+    data_sensitivity: internal
+    rollback_hint: "Huỷ bằng cancel_pipeline; job đã chạy xong (deploy, migrate) không tự hoàn tác"
+    input_schema:
+      properties:
+        project: {type: string}
+        pipeline_id: {type: integer}
+      required: [pipeline_id]
+
+  - name: cancel_pipeline
+    description: Huỷ các job đang chờ hoặc đang chạy của một pipeline
+    handler: gitlab:cancel_pipeline
+    action_class: write
+    reversible: "no"
+    blast_radius: workload
+    data_sensitivity: internal
+    rollback_hint: "Chạy lại bằng retry_pipeline; job bị ngắt giữa chừng có thể để lại trạng thái dở"
+    input_schema:
+      properties:
+        project: {type: string}
+        pipeline_id: {type: integer}
+      required: [pipeline_id]
+
+  - name: retry_job
+    description: Chạy lại một job
+    handler: gitlab:retry_job
+    action_class: write
+    reversible: "no"
+    blast_radius: workload
+    data_sensitivity: internal
+    rollback_hint: "Job đã chạy xong không tự hoàn tác"
+    input_schema:
+      properties:
+        project: {type: string}
+        job_id: {type: integer}
+      required: [job_id]
+
+  - name: play_job
+    description: Chạy một job manual (thường là deploy, rollback hoặc migrate theo môi trường). Xem get_pipeline để biết job làm gì trước khi gọi
+    handler: gitlab:play_job
+    action_class: write
+    reversible: "no"
+    blast_radius: namespace
+    data_sensitivity: internal
+    rollback_hint: "Chạy job rollback của môi trường nếu pipeline có, hoặc deploy lại bản trước từ list_deployments"
+    input_schema:
+      properties:
+        project: {type: string}
+        job_id: {type: integer}
+      required: [job_id]
+
+  - name: create_note
+    description: Viết comment (Markdown) vào merge request hoặc issue
+    handler: gitlab:create_note
+    action_class: write
+    reversible: partial  # xoá được comment, nhưng email thông báo đã gửi thì không thu hồi
+    blast_radius: object
+    data_sensitivity: internal
+    rollback_hint: Xoá comment vừa tạo
+    undo: gitlab_undo
+    input_schema:
+      properties:
+        project: {type: string}
+        target: {type: string, enum: [merge_request, issue]}
+        iid: {type: integer, description: "Số !iid của MR hoặc #iid của issue"}
+        body: {type: string}
+      required: [target, iid, body]
+
+  - name: api_admin
+    description: "Gọi GitLab API v4 bất kỳ (GET, POST, PUT, PATCH, DELETE), kể cả merge, xoá nhánh, sửa biến CI, đọc token, trong phạm vi quyền của token. Luôn cần duyệt"
+    handler: gitlab:api_admin
+    action_class: destructive
+    reversible: "no"
+    blast_radius: cluster
+    data_sensitivity: secret
+    untrusted_output: true
+    rollback_hint: "Không tự hoàn tác; nhánh, tag, dự án đã xoá cần khôi phục tay"
+    input_schema:
+      properties:
+        method: {type: string}
+        path: {type: string}
+        query: {type: object}
+        body: {type: object}
+      required: [method, path]

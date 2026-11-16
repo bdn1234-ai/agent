@@ -19,6 +19,7 @@ Agent chỉ dùng công cụ thật. Mỗi công cụ được tạo từ một 
 | `data` (nội bộ, tự có ở mọi tenant) | query R0 (lọc kết quả đã lưu theo result_id), script R4 (Python trong sandbox, luôn cần duyệt) | — |
 | `http_api` | get R1, post R3 | base_url, auth_header, auth_value, allowed_paths |
 | `openstack` | list_services R0, api_read R1, api_write R3, api_admin R4 (xem [OpenStack](#openstack)) | config (clouds.yaml hoặc openrc), cloud, password, region, interface, ca_cert |
+| `gitlab` | list_projects, list_pipelines, get_pipeline, list_deployments, list_commits, list_merge_requests, list_issues (R0); job_log, get_merge_request, get_file, api_read (R1; api_read chặn biến CI, token, khoá, webhook, runner); retry_pipeline, cancel_pipeline, retry_job, play_job, create_note (R3); api_admin R4 | url (gồm cả đường dẫn con nếu GitLab cài dưới /gitlab), token (scope read_api để đọc, api + role Developer để ghi), default_project |
 | `postgres`, `mysql` | query R1 (chỉ đọc, 15 giây, 200 dòng), execute R3 (có chạy thử rồi rollback) | host, port, database, user, password |
 
 `python -m kagent.tools` in danh sách template, công cụ và mức rủi ro.
@@ -110,6 +111,7 @@ Theo cách Google SRE (rollback là cách giảm thiệt hại chung, phải di�
 | Elasticsearch `delete_index` | Xoá mềm: đóng index thay vì xoá; mở lại để khôi phục. | index đang đóng |
 | PostgreSQL/MySQL `execute` | `DROP TABLE` → đổi tên sang bảng `_kagent_trash_*`. `DELETE`/`UPDATE`/`TRUNCATE` → sao lưu các dòng sang `_kagent_bak_*`, đếm đủ dòng rồi mới chạy (`UPDATE` cần khoá chính). `ADD COLUMN`, `CREATE TABLE/INDEX` → xoá đúng thứ vừa thêm. | `INSERT`, nhiều câu trong một lần gọi, quá `max_rows` dòng; pha thu gọn của migration (`DROP/RENAME/đổi kiểu cột`, `DROP INDEX/VIEW/SCHEMA`) luôn cần người duyệt |
 | Silence (Alertmanager, Grafana) | Tạo: gỡ đúng silence vừa tạo. Gỡ: tạo lại cùng matchers tới hạn cũ. | |
+| GitLab `create_note` | Xoá đúng comment vừa tạo; comment đã bị sửa thì coi là có thay đổi khác. | email thông báo đã gửi; `retry_pipeline`, `cancel_pipeline`, `retry_job`, `play_job` (job đã chạy, như deploy hay migrate, không tự hoàn tác) |
 | OpenStack `api_write` | Action có cặp ngược (`os-stop`↔`os-start`, `pause`↔`unpause`, `resize`→`revertResize`...). `PUT/PATCH` một tài nguyên: đọc giá trị cũ của các trường sắp đổi rồi ghi lại. | `POST` tạo mới, action khác |
 
 - **Kiểm tra sau khi chạy:** chờ `verify_minutes` (mặc định 5) rồi kiểm tra workload đã sẵn sàng (rollout đủ pod) và không có cảnh báo mới trên namespace hay đối tượng của lệnh (từ nguồn cảnh báo đã kết nối ở tab Sự cố). Có cảnh báo mới thì báo không đạt ngay. Lệnh đã **tự chạy** mà không đạt thì tự hoàn tác (`auto_revert`); lệnh người đã duyệt thì chỉ báo, người quyết định.
