@@ -47,8 +47,9 @@ def list_incidents(conn, tenant_id: str, status: str = "open", limit: int = 100)
     return out
 
 
+# Lệnh chỉ hiện khi đã thực sự chạy (ran, failed); proposed/denied/expired/skipped vẫn ghi (mốc cho bản tóm tắt) nhưng không hiện.
 SHOWN_EVENTS = ("investigated", "verified", "resolved", "reopened", "closed", "no_action", "stopped", "error", "quota", "task_added", "task_done", "task_reopened",
-                "proposed", "ran", "failed", "denied", "expired", "skipped")
+                "ran", "failed")
 
 
 def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
@@ -66,9 +67,13 @@ def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
         if all(a["status"] == "resolved" for a in group):
             out.append({"at": max(a["resolved_at"] or "" for a in group), "kind": "alert_resolved", "actor": "alert", "text": f"{name} hết"})
     rounds = 0
+    dry = {r["id"] for r in conn.execute("SELECT id, args FROM incident_action WHERE incident_id=? AND args LIKE '%--dry-run%'", (inc["id"],))
+           if actions.is_dry_run(json.loads(r["args"] or "null"))}  # dữ liệu cũ trước khi lệnh chạy thử thôi được ghi
     for e in conn.execute("SELECT at, kind, text, data, actor, action_id FROM incident_event WHERE incident_id=? AND kind IN (%s) ORDER BY id"
                           % ",".join("?" * len(SHOWN_EVENTS)), (inc["id"], *SHOWN_EVENTS)).fetchall():
         e = dict(e)
+        if e["action_id"] in dry:
+            continue
         e["data"] = json.loads(e["data"]) if e["data"] else {}
         if e["kind"] == "investigated":
             rounds += 1
@@ -89,7 +94,7 @@ def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
 
 
 EVENT_CAT = {"alert": "alert", "alert_resolved": "alert", "resolved": "alert", "reopened": "alert",
-             "proposed": "action", "ran": "action", "failed": "action", "denied": "action", "expired": "action", "skipped": "action", "verified": "action", "closed": "action",
+             "ran": "action", "failed": "action", "verified": "action", "closed": "action",
              "task_added": "action", "task_done": "action", "task_reopened": "action"}
 
 

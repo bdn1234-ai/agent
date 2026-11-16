@@ -121,18 +121,10 @@ def who(e: dict, name) -> str:
         return "cảnh báo"
     if kind == "investigated":
         return f"kagent · điều tra lần {data['round']}" if data.get("round") else "kagent · điều tra"
-    if kind == "proposed":
-        return "kagent đề xuất" if actor == "kagent" else f"{name(actor)} yêu cầu"
     if kind in ("ran", "failed"):
         if data.get("auto"):
             return "tự động" if data.get("origin") == "investigation" else f"{name(actor)} chạy"
         return f"{name(actor)} duyệt"
-    if kind == "denied":
-        return f"{name(actor)} từ chối"
-    if kind == "expired":
-        return "hết hạn"
-    if kind == "skipped":
-        return "bỏ qua"
     if kind == "quota":
         return "hết quota"
     if kind == "task_added":

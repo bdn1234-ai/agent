@@ -276,6 +276,12 @@ class Reporting(llm.HeuristicProvider):
 RESTART = {"tool": "k8s.kubectl_write", "args": {"command": "rollout restart deployment/web -n default"}, "why": "khởi động lại"}
 
 
+def _recorded(iid, kind):
+    """Sự kiện lệnh chưa chạy (đề xuất, từ chối, hết hạn, bỏ qua) vẫn được ghi nhưng không hiện trên dòng sự kiện."""
+    with db.session() as conn:
+        return dict(conn.execute("SELECT * FROM incident_event WHERE incident_id=? AND kind=? ORDER BY id DESC", (iid, kind)).fetchone())
+
+
 def _web_incident(users):
     poll(users)
     with db.session() as conn:
@@ -482,8 +488,9 @@ def test_approval_updates_incident_at_once_and_timeline_shows_fix(flow, users, i
     ran = next(e for e in inc["timeline"] if e["kind"] == "ran")
     assert (ran["who"], ran["text"]) == ("admin duyệt", "kubectl_write rollout restart deployment/web -n default → deployment.apps/web restarted")
     assert ran["action_id"] == inc["actions"][0]["id"] and ran["actor"] == inc["actions"][0]["decided_by"]
-    proposed = next(e for e in inc["timeline"] if e["kind"] == "proposed")
-    assert proposed["who"] == "kagent đề xuất" and proposed["text"].startswith("kubectl_write rollout restart") and "→ cần duyệt" in proposed["text"]
+    assert not any(e["kind"] == "proposed" for e in inc["timeline"])  # chỉ hiện lệnh đã thực sự chạy
+    proposed = _recorded(iid, "proposed")
+    assert proposed["actor"] == "kagent" and proposed["text"].startswith("kubectl_write rollout restart") and "→ cần duyệt" in proposed["text"]
     investigated = next(e for e in inc["timeline"] if e["kind"] == "investigated")
     assert investigated["who"] == "kagent · điều tra lần 1" and investigated["text"] == "1 lệnh đọc → image lỗi (độ tin 0.60)"
     assert not any("bắt đầu điều tra" in t for t in texts) and inc["cause"]["round"] == 1 and inc["cause"]["text"] == "image lỗi"
@@ -512,14 +519,15 @@ def test_write_in_incident_chat_is_logged_and_denial_recorded(flow, users):
     assert row["origin"] == "chat" and row["requested_by"] == uid and row["status"] == "pending" and row["approval_id"]
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["actions"] == []  # thẻ Hành động cũ chỉ hiện lệnh do điều tra đề xuất
-    proposed = next(e for e in inc["timeline"] if e["kind"] == "proposed")
-    assert proposed["who"] == "alice yêu cầu" and proposed["text"].startswith("kubectl_write rollout undo deployment/web -n default → cần duyệt")
+    proposed = _recorded(iid, "proposed")
+    assert proposed["actor"] == uid and proposed["text"].startswith("kubectl_write rollout undo deployment/web -n default → cần duyệt")
     item = flow.get(f"/api/incidents/{iid}").json()["waiting"][0]
     assert item["kind"] == "approval" and item["approval_id"] == row["approval_id"] and item["requested_by"] == "alice"
     flow.post(f"/api/approvals/{row['approval_id']}/decide", json={"action": "deny", "reason": "chưa rollback, xem log trước"})
-    denied = next(e for e in flow.get(f"/api/incidents/{iid}").json()["timeline"] if e["kind"] == "denied")
-    assert (denied["who"], denied["text"]) == ("admin từ chối", "kubectl_write rollout undo deployment/web -n default → từ chối: chưa rollback, xem log trước")
-    assert denied["action_id"] == row["id"] and denied["actor"] != uid
+    assert not any(e.get("action_id") for e in flow.get(f"/api/incidents/{iid}").json()["timeline"])  # lệnh bị từ chối không hiện
+    denied = _recorded(iid, "denied")
+    assert denied["text"] == "kubectl_write rollout undo deployment/web -n default → từ chối: chưa rollback, xem log trước"
+    assert denied["action_id"] == row["id"] and denied["actor"] not in (None, uid)
 
 
 def test_expired_approval_is_logged_and_hands_to_human(flow, users):
@@ -532,8 +540,8 @@ def test_expired_approval_is_logged_and_hands_to_human(flow, users):
         incidents.follow_up(conn, tenant(users))
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["stage"] == "needs_human" and inc["actions"][0]["status"] == "expired"
-    expired = next(e for e in inc["timeline"] if e["kind"] == "expired")
-    assert expired["text"] == "kubectl_write rollout restart deployment/web -n default → hết hạn duyệt, chưa chạy" and expired["who"] == "hết hạn"
+    assert not any(e.get("action_id") for e in inc["timeline"])
+    assert _recorded(iid, "expired")["text"] == "kubectl_write rollout restart deployment/web -n default → hết hạn duyệt, chưa chạy"
 
 
 def test_waiting_shows_expired_once_then_retry_and_dismiss(flow, users):
@@ -592,9 +600,8 @@ def test_migration_copies_json_actions_with_original_times(flow, users):
         ("ok", 1, 0, "2026-11-12T17:00:00+00:00"), ("expired", 0, None, "2026-11-13T09:48:07+00:00")]
     assert rows[0]["result_line"] == "deployment.apps/web restarted"
     events = [(e["at"], e["who"], e["text"]) for e in flow.get(f"/api/incidents/{iid}").json()["timeline"] if e.get("action_id")]
-    assert events == [("2026-11-12T17:00:00+00:00", "tự động", "kubectl_write rollout restart deployment/web -n default → deployment.apps/web restarted"),
-                      ("2026-11-13T09:48:07+00:00", "kagent đề xuất", "kubectl_write rollout undo deployment/web -n default → cần duyệt: tự xử lý đang tắt ở dev"),
-                      ("2026-11-13T10:18:07+00:00", "hết hạn", "kubectl_write rollout undo deployment/web -n default → hết hạn duyệt, chưa chạy")]
+    assert events == [("2026-11-12T17:00:00+00:00", "tự động", "kubectl_write rollout restart deployment/web -n default → deployment.apps/web restarted")]
+    assert _recorded(iid, "proposed")["at"] == "2026-11-13T09:48:07+00:00" and _recorded(iid, "expired")["at"] == "2026-11-13T10:18:07+00:00"
 
 
 def test_investigation_lives_in_shared_conversation(flow, users):
@@ -932,6 +939,19 @@ def test_new_message_in_incident_conversation_skips_proposed_fix(flow, users):
     done(chat(flow, "khoan, xem log trước đã", inc["conversation_id"]))
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["stage"] == "needs_human" and not any(w["kind"] in ("approval", "retry") for w in inc["waiting"])
-    assert any(e["kind"] == "skipped" and "bỏ qua" in e["text"] for e in inc["timeline"])
+    assert "bỏ qua" in _recorded(iid, "skipped")["text"] and not any(e.get("action_id") for e in inc["timeline"])
     fix = flow.get(f"/api/conversations/{inc['conversation_id']}").json()["messages"][0]["incident_actions"][0]
     assert fix["status"] == "skipped"
+
+
+def test_timeline_hides_old_dry_run_rows(flow, users):
+    iid = _web_incident(users)
+    llm.set_provider(Reporting(0.6, [RESTART], verdict=False))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+    action = flow.get(f"/api/incidents/{iid}").json()["actions"][0]
+    flow.post(f"/api/approvals/{action['approval_id']}/decide", json={"action": "approve_once"})
+    assert any(e["kind"] == "ran" for e in flow.get(f"/api/incidents/{iid}").json()["timeline"])
+    with db.session() as conn:  # dữ liệu cũ: lệnh chạy thử từng được ghi như lệnh đã chạy
+        conn.execute("UPDATE incident_action SET args=? WHERE id=?", (json.dumps({"command": "rollout restart deployment/web --dry-run=server"}), action["id"]))
+    assert not any(e.get("action_id") for e in flow.get(f"/api/incidents/{iid}").json()["timeline"])
