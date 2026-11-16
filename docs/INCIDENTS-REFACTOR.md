@@ -100,7 +100,8 @@ Thêm cột `actor` (`kagent`, id người dùng, `alert`, `system`) và `action
 | `ran`, `failed` | lệnh chạy xong | `<người> duyệt` hoặc `tự động` · `lệnh → result_line` |
 | `denied`, `expired`, `skipped` | quyết định, hết hạn, hoặc hội thoại có tin nhắn mới trước khi duyệt | không hiện (như `proposed`) |
 | `verified` | xác minh | `cảnh báo đã hết` / `còn N cảnh báo` |
-| `reopened`, `resolved`, `closed`, `error`, `quota` | như hiện tại, thêm `quota` | |
+| `reopened`, `resolved`, `closed` | như hiện tại | |
+| `no_action`, `quota`, `error`, `stopped` | trạng thái chờ người | không hiện; mục "Đang chờ" đọc chúng |
 
 Bắt đầu và hết của cảnh báo vẫn lấy từ `alert_event` lúc đọc: giờ `starts_at` do nguồn cảnh báo cung cấp, có thể trước lúc kagent lấy về.
 

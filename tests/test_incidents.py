@@ -358,7 +358,7 @@ def test_no_safe_action_means_reported(flow, users):
     with db.session() as conn:
         incidents.investigate(conn, tenant(users), iid)  # heuristic: không đề xuất hành động
     inc = flow.get(f"/api/incidents/{iid}").json()
-    assert inc["stage"] == "reported" and any(e["kind"] == "no_action" for e in inc["timeline"])
+    assert inc["stage"] == "reported" and _recorded(iid, "no_action") and not any(e["kind"] == "no_action" for e in inc["timeline"])
 
 
 def test_reinvestigate_creates_conversation_before_background_run(flow, users):
@@ -797,7 +797,7 @@ def test_model_error_during_investigation_marks_error_without_report(flow, users
         incidents.investigate(conn, tenant(users), iid)
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["stage"] == "error" and inc["actions"] == [] and provider.data is None  # không viết báo cáo từ câu "Lỗi khi gọi model"
-    assert any(e["kind"] == "error" and "mất kết nối" in e["text"] for e in inc["timeline"])
+    assert "mất kết nối" in inc["waiting"][0]["text"] and not any(e["kind"] == "error" for e in inc["timeline"])
     msg = flow.get(f"/api/conversations/{inc['conversation_id']}").json()["messages"][0]
     assert "mất kết nối" in msg["error"]
 
@@ -810,7 +810,7 @@ def test_quota_exhausted_stops_until_user_continues(flow, users, clock, monkeypa
     inc = flow.get(f"/api/incidents/{iid}").json()
     assert inc["stage"] == "waiting_quota" and inc["state"]["label"] == "Chờ quota" and inc["investigate_after"] is None
     assert inc["waiting"][0]["kind"] == "quota" and inc["waiting"][0]["source"] == "tenant"
-    assert any(e["kind"] == "quota" and e["who"] == "hết quota" for e in inc["timeline"])
+    assert not any(e["kind"] == "quota" for e in inc["timeline"])
     item = next(i for i in flow.get("/api/incidents?status=attention").json()["items"] if i["id"] == iid)
     assert item["state"]["key"] == "waiting_quota" and "Tiếp tục" in item["line"]
 

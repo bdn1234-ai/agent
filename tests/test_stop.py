@@ -158,7 +158,9 @@ def test_member_stops_incident_investigation(users, infra):
     worker.join(5)
     inc = admin.get(f"/api/incidents/{iid}").json()
     assert inc["stage"] == "needs_human" and not inc["actions"]
-    assert any(e["kind"] == "stopped" and "alice" in e["text"] for e in inc["timeline"])
+    assert not any(e["kind"] == "stopped" for e in inc["timeline"])  # trạng thái, không phải việc đã làm với sự cố
+    with db.session() as conn:
+        assert "alice" in conn.execute("SELECT text FROM incident_event WHERE incident_id=? AND kind='stopped'", (iid,)).fetchone()["text"]
 
 
 def _investigate(tenant_id, iid):

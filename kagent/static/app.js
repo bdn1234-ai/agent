@@ -314,8 +314,8 @@ function span(ms) {
   return `${Math.floor(hh / 24)} ngày ${hh % 24} giờ`;
 }
 const STATE_TONE = { needs_human: "bad", awaiting_approval: "warn", waiting_quota: "warn", investigating: "info", queued: "info", verifying: "info", handled: "ok", cleared: "ok", closed: "" };
-const EV_MARK = { alert: "alert", alert_resolved: "clear", resolved: "clear", reopened: "alert", investigated: "agent", no_action: "agent",
-  ran: "human", verified: "clear", closed: "human", quota: "alert", task_added: "human", task_done: "clear", task_reopened: "human", failed: "fail", error: "fail", stopped: "fail" };
+const EV_MARK = { alert: "alert", alert_resolved: "clear", resolved: "clear", reopened: "alert", investigated: "agent",
+  ran: "human", verified: "clear", closed: "human", task_added: "human", task_done: "clear", task_reopened: "human", failed: "fail" };
 const EV_FILTERS = [["all", "Tất cả"], ["action", "Hành động"], ["agent", "Điều tra"], ["alert", "Cảnh báo"]];
 
 async function incidentDetail(main, id) {

@@ -47,9 +47,9 @@ def list_incidents(conn, tenant_id: str, status: str = "open", limit: int = 100)
     return out
 
 
-# Lệnh chỉ hiện khi đã thực sự chạy (ran, failed); proposed/denied/expired/skipped vẫn ghi (mốc cho bản tóm tắt) nhưng không hiện.
-SHOWN_EVENTS = ("investigated", "verified", "resolved", "reopened", "closed", "no_action", "stopped", "error", "quota", "task_added", "task_done", "task_reopened",
-                "ran", "failed")
+# Chỉ việc đã xảy ra với sự cố: lệnh đã thực sự chạy (ran, failed), không có đề xuất hay trạng thái chờ (no_action, quota, error, stopped...).
+# Sự kiện ẩn vẫn ghi: mốc cho bản tóm tắt, và "Đang chờ" đọc no_action/quota/error/stopped.
+SHOWN_EVENTS = ("investigated", "verified", "resolved", "reopened", "closed", "task_added", "task_done", "task_reopened", "ran", "failed")
 
 
 def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
