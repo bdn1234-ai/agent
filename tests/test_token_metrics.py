@@ -194,3 +194,19 @@ def test_cache_hit_rate_ignores_llms_that_do_not_report_cache(users):
     t = alice.get("/api/metrics").json()["tokens"]
     assert t["cache_hit_pct"] == 90.0 and t["cache_unmeasured"] == 1000
     assert {r["label"]: r["cache_known"] for r in t["by_llm"]} == {"AI Gateway · qwen": 0, "relay · claude-opus-5": 1}
+
+
+def test_metrics_report_knowledge_sent_and_skipped(users):
+    alice = users["alice"]
+    ep = alice.run("xem pod trong namespace default")
+    with db.session() as conn:
+        trace = json.loads(conn.execute("SELECT trace FROM episode WHERE id=?", (ep["id"],)).fetchone()[0])
+        ctx = next(s for s in trace if s["type"] == "context")
+        llm.save_usage(conn, alice.tenant, ep["id"], [
+            {"purpose": "agent", "model": "m", "input_tokens": 1000, "output_tokens": 10, "cache_read": 1000, "cache_write": 0}] * 2)
+    t = alice.get("/api/metrics").json()["tokens"]
+    k = t["knowledge"]
+    assert k["turns"] >= 1 and k["sent_chars"] >= ctx["knowledge_chars"] and k["skipped_chars"] >= 0
+    assert k["tokens"] >= ctx["knowledge_chars"] // 4 * 2 and k["agent_input"] >= 4000
+    row = next(r for r in t["top_turns"] if r["id"] == ep["id"])
+    assert row["knowledge_chars"] == ctx["knowledge_chars"] and row["skipped_chars"] == ctx["skipped_chars"]

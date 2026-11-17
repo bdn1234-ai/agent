@@ -1585,6 +1585,7 @@ function tokenSection(t) {
           `chưa tính ${num(t.cache_unmeasured)} token input từ LLM không báo cache`) : null)),
     table(["Mục đích", "Lần gọi", "Input", "Cache đọc", "Cache ghi", "Output"], t.by_purpose.map((r) =>
       h("tr", {}, h("td", {}, PURPOSE[r.purpose] || r.purpose), h("td", {}, num(r.calls)), h("td", {}, num(r.input)), h("td", {}, num(r.cache_read)), h("td", {}, num(r.cache_write)), h("td", {}, num(r.output))))),
+    knowledgeSection(t.knowledge),
     h("h2", { class: "row" }, "Token theo LLM, 14 ngày qua"),
     h("p", { class: "small" }, "Tổng token xử lý mỗi ngày (input, cache đọc/ghi, output), chia theo cấu hình LLM và model. Rê chuột lên cột để xem chi tiết."),
     llmUsageChart(t),
@@ -1599,8 +1600,22 @@ function tokenSection(t) {
     h("p", { class: "small" }, "Kết quả công cụ đi thẳng vào context của agent; công cụ trả nhiều ký tự là chỗ nên lọc trước."),
     table(["Công cụ", "Lần gọi", "Tổng ký tự", "Lớn nhất"], t.tools.map((r) => h("tr", {}, h("td", {}, h("code", {}, r.tool)), h("td", {}, num(r.calls)), h("td", {}, num(r.result_chars)), h("td", {}, num(r.max_chars))))),
     h("h2", { class: "row" }, "Lượt tốn token nhất"),
-    table(["Thời gian", "Yêu cầu", "Lần gọi LLM", "Input", "Cache đọc", "Output"], t.top_turns.map((r) =>
-      h("tr", {}, h("td", {}, fmtTime(r.started_at)), h("td", {}, r.task), h("td", {}, num(r.llm_calls)), h("td", {}, num(r.input + r.cache_write)), h("td", {}, num(r.cache_read)), h("td", {}, num(r.output))))));
+    table(["Thời gian", "Yêu cầu", "Lần gọi LLM", "Input", "Cache đọc", "Output", "Tri thức mới", "Bỏ qua do trùng"], t.top_turns.map((r) =>
+      h("tr", {}, h("td", {}, fmtTime(r.started_at)), h("td", {}, r.task), h("td", {}, num(r.llm_calls)), h("td", {}, num(r.input + r.cache_write)), h("td", {}, num(r.cache_read)), h("td", {}, num(r.output)),
+        h("td", {}, r.knowledge_chars == null ? "—" : num(r.knowledge_chars)), h("td", {}, r.skipped_chars == null ? "—" : num(r.skipped_chars))))));
+}
+
+function knowledgeSection(k) {
+  if (!k || !k.turns) return null;
+  const tile = (value, label, title) => h("div", { class: "tile", title }, h("b", {}, value), h("span", { class: "small" }, label));
+  return h("div", {},
+    h("h2", { class: "row" }, "Tri thức gửi kèm lượt"),
+    h("p", { class: "small" }, `${num(k.turns)} lượt. Tri thức đã có trong lịch sử hội thoại không gửi lại; số ký tự tính trên khối tri thức của lượt.`),
+    h("div", { class: "grid" },
+      tile(num(k.sent_chars), "Ký tự tri thức mới"),
+      tile(num(k.skipped_chars), "Ký tự bỏ qua do trùng", "Đã gửi ở lượt trước, model vẫn thấy trong lịch sử"),
+      tile(k.skipped_pct === null ? "—" : k.skipped_pct + "%", "Tỷ lệ bỏ qua"),
+      tile(k.input_pct === null ? "—" : k.input_pct + "%", "Tri thức trên input agent", "Ước lượng: ký tự/4 × số lần gọi agent của lượt, chia tổng input (gồm cache) của agent")));
 }
 
 VIEWS.metrics = async (main) => {

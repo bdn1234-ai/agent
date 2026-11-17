@@ -1934,8 +1934,11 @@ def token_metrics(conn, tid: str, days: int = 7) -> dict:
                          (tid, since)).fetchone()
     total_in, cached = known["total_in"], known["cached"]
     tools: dict[str, dict] = {}
-    for r in conn.execute("SELECT trace FROM episode WHERE tenant_id=? AND started_at>=?", (tid, since)).fetchall():
+    ctx_of: dict[str, dict] = {}
+    for r in conn.execute("SELECT id, trace FROM episode WHERE tenant_id=? AND started_at>=?", (tid, since)).fetchall():
         for step in json.loads(r["trace"]):
+            if step.get("type") == "context" and "knowledge_chars" in step:
+                ctx_of[r["id"]] = step
             if step.get("type") == "tool_call":
                 t = tools.setdefault(step["tool"], {"tool": step["tool"], "calls": 0, "result_chars": 0, "max_chars": 0})
                 size = step.get("result_chars") or len(json.dumps(step.get("result"), ensure_ascii=False))
@@ -1948,9 +1951,26 @@ def token_metrics(conn, tid: str, days: int = 7) -> dict:
         "FROM episode e JOIN llm_call c ON c.episode_id=e.id AND c.purpose!='reflect' AND c.purpose!='curate' AND c.purpose!='judge' "
         "WHERE e.tenant_id=? AND e.started_at>=? GROUP BY e.id ORDER BY sum(c.input_tokens+c.cache_read+c.cache_write+c.output_tokens) DESC LIMIT 10",
         (tid, since)).fetchall())
-    return {"days": days, "by_purpose": by_purpose, "cache_hit_pct": round(100 * cached / total_in, 1) if total_in else None,
+    for t in top_turns:
+        step = ctx_of.get(t["id"], {})
+        t["knowledge_chars"], t["skipped_chars"] = step.get("knowledge_chars"), step.get("skipped_chars")
+    return {"days": days, "by_purpose": by_purpose, "knowledge": _knowledge_usage(conn, tid, since, ctx_of), "cache_hit_pct": round(100 * cached / total_in, 1) if total_in else None,
             "cache_unmeasured": known["unmeasured"],
             "tools": sorted(tools.values(), key=lambda t: -t["result_chars"])[:15], "top_turns": top_turns, **llm_usage(conn, tid)}
+
+
+def _knowledge_usage(conn, tid: str, since: str, ctx_of: dict[str, dict]) -> dict:
+    """Tri thức gửi kèm lượt nằm trong prefix của mọi lần gọi agent của lượt đó, nên token tri thức = ký tự/4 × số lần gọi agent."""
+    calls = {r["episode_id"]: r for r in conn.execute(
+        "SELECT episode_id, count(*) n, sum(input_tokens+cache_read+cache_write) input FROM llm_call "
+        "WHERE tenant_id=? AND at>=? AND purpose='agent' GROUP BY episode_id", (tid, since)).fetchall()}
+    sent = sum(s["knowledge_chars"] for s in ctx_of.values())
+    skipped = sum(s.get("skipped_chars", 0) for s in ctx_of.values())
+    tokens = sum(s["knowledge_chars"] // 4 * calls[e]["n"] for e, s in ctx_of.items() if e in calls)
+    agent_input = sum(calls[e]["input"] for e in ctx_of if e in calls)
+    return {"turns": len(ctx_of), "sent_chars": sent, "skipped_chars": skipped,
+            "skipped_pct": round(100 * skipped / (sent + skipped), 1) if sent + skipped else None,
+            "tokens": tokens, "agent_input": agent_input, "input_pct": round(100 * tokens / agent_input, 1) if agent_input else None}
 
 
 def llm_usage(conn, tid: str, days: int = 14) -> dict:

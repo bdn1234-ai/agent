@@ -10,8 +10,8 @@
 | 1 `kagent/conversation.py` | Xong | So từng byte trên bản sao dữ liệu thật: 266/266 kết quả `load_history` và `assemble_context` giống code cũ; 773 test xanh |
 | 2 Bỏ phần đã gửi | Xong | Mô phỏng trên 23 hội thoại thật: tri thức gửi giảm 61% (hội thoại dài 197k → 40k ký tự), `ku_used` không đổi, golden giữ 0,9; 780 test xanh. Tắt được bằng `KAGENT_KNOWLEDGE_DEDUP=0` |
 | 3 Bỏ trùng trong lượt | Xong | KU đã có trong core/playbook chiếm 25% ký tự units. Bản gửi đủ giảm 12% (1,45M → 1,28M ký tự); khi đã bỏ phần gửi ở lượt trước thì gần như không giảm thêm (562k), vì playbook vốn chỉ gửi một lần mỗi hội thoại. Golden giữ 0,9; 784 test xanh |
-| 4 Playbook theo độ liên quan | Chưa làm | Cần golden task (0.3) trước |
-| 5 Usage thật | Chưa làm | |
+| 4 Playbook theo độ liên quan | Hoãn | Số đo giai đoạn 5 cho thấy tri thức chỉ chiếm khoảng 7% input agent, và đó là trước khi bỏ trùng; playbook giờ chỉ gửi một lần mỗi hội thoại. Phần còn tiết kiệm được nhỏ, trong khi rủi ro mất tri thức cần thiết thì có thật. Riêng thiếu sót "có metadata Skill nhưng không có tool đọc `SKILL.md`" nên tách thành việc riêng |
+| 5 Usage thật | Xong | Màn Đo lường có mục "Tri thức gửi kèm lượt" (ký tự mới, ký tự bỏ qua do trùng, tỷ lệ bỏ qua, tri thức trên input agent) và hai cột tương ứng ở bảng lượt tốn nhất. Token tri thức = ký tự/4 × số lần gọi agent của lượt, vì khối tri thức nằm trong prefix của mọi lần gọi. Số thật 30 lượt đầu: tri thức chiếm 7% input agent. Giữ `tokens_est` trong trace làm số ước lượng; số thật nằm ở `llm_call`. 785 test xanh |
 
 Ghi chú khi triển khai giai đoạn 2:
 
