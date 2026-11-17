@@ -35,6 +35,7 @@ class Settings:
         self.budget_core = 1500
         self.budget_playbook = 3000
         self.budget_ku = 2000
+        self.knowledge_dedup = env("KAGENT_KNOWLEDGE_DEDUP", "1") == "1"  # không gửi lại tri thức đã có trong lịch sử hội thoại
         self.budget_history = 24000  # lịch sử thô gồm cả kết quả công cụ; phần lớn được đọc từ prompt cache
         self.max_agent_steps = 12  # bước đã rẻ nhờ _filter và cache; hết bước thì model buộc phải tổng kết
         for key, value in overrides.items():

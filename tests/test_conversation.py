@@ -3,8 +3,11 @@ import importlib.util
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
-from kagent import conversation, db
+import pytest
+
+from kagent import conversation, db, llm
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -65,3 +68,129 @@ def test_measure_counts_knowledge_repeated_across_turns(tmp_path):
     second = len("- [ku:aaaa] một") + len("- [ku:cccc] ba")
     assert [t["repeated_pct"] for t in c1["per_turn"]] == [0, round(100 * len("- [ku:aaaa] một") / second)]
     assert convs["c2"]["knowledge_chars"] == 0
+
+
+# --- Không gửi lại tri thức đã có trong lịch sử ---
+
+PLAYBOOK = "# k8s_ops\n\n## Cạm bẫy\n- [ku:feed0001] ImagePullBackOff: kiểm tra registry trước"
+
+
+def _ku(n, content):
+    return {"id": f"{n:08x}" + "0" * 24, "kind": "lesson", "title": f"KU {n}", "content": content, "applies_when": ""}
+
+
+class Recording(llm.HeuristicProvider):
+    """Ghi lại đúng những gì gửi model và trả transcript như provider thật, để lượt sau phát lại nguyên văn."""
+    name = "recording"
+
+    def __init__(self):
+        self.calls = []
+
+    def route(self, task):
+        return {"task_type": "observability" if "metric" in task else "k8s_ops", "entities": [], "tokens": 0}
+
+    def run_agent(self, task, context, tools, call_tool, history=None, on_text=None, cancelled=None, turn_context=""):
+        self.calls.append({"history": json.loads(json.dumps(history or [])), "turn": turn_context})
+        user = {"role": "user", "content": conversation.task_blocks(task, turn_context)}
+        return {"answer": "xong", "tokens": 0, "messages": [user, {"role": "assistant", "content": [{"type": "text", "text": "xong"}]}]}
+
+
+@pytest.fixture
+def knowledge(monkeypatch):
+    state = {"files": {"playbooks/k8s_ops.md": PLAYBOOK, "playbooks/observability.md": "# obs\n- [ku:feed0002] dùng aggregation"},
+             "kus": [_ku(1, "pod log 404 do ReplicaSet mới"), _ku(2, "0 hit không chứng minh là không có lỗi")]}
+    monkeypatch.setattr(conversation.compiler, "read_published", lambda tenant_id: dict(state["files"]))
+    monkeypatch.setattr(conversation, "retrieve", lambda *a, **k: list(state["kus"]))
+    provider = Recording()
+    llm.set_provider(provider)
+    return SimpleNamespace(state=state, provider=provider)
+
+
+def _chat(user, message, cid=None):
+    r = user.post("/api/chat", json={"message": message, "conversation_id": cid, "env": "dev"})
+    assert r.status_code == 200, r.text
+    evs = [json.loads(line[6:]) for line in r.text.split("\n\n") if line.startswith("data: ")]
+    return next(e for e in evs if e["type"] == "done")["message"], evs[0]["conversation_id"]
+
+
+def test_second_turn_sends_only_recall(users, knowledge):
+    alice = users["alice"]
+    first, cid = _chat(alice, "xem pod")
+    second, _ = _chat(alice, "xem pod lần nữa", cid)
+    t1, t2 = (c["turn"] for c in knowledge.provider.calls)
+    assert 'section="playbook" task_type="k8s_ops"' in t1 and "pod log 404" in t1
+    assert "playbook" not in t2.split('section="recall"')[0] and "pod log 404" not in t2
+    assert "playbook k8s_ops" in t2 and "[ku:00000001]" in t2 and "[ku:00000002]" in t2
+    assert first["ku_used"] == second["ku_used"]
+    ctx = next(s for s in conversation_trace(second) if s["type"] == "context")
+    assert ctx["skipped_chars"] > 0 and len(ctx["skipped_ids"]) == 2
+
+
+def conversation_trace(message):
+    with db.session() as conn:
+        return json.loads(conn.execute("SELECT trace FROM episode WHERE id=?", (message["id"],)).fetchone()[0])
+
+
+def test_history_replayed_byte_for_byte(users, knowledge):
+    alice = users["alice"]
+    _, cid = _chat(alice, "xem pod")
+    _chat(alice, "xem pod lần nữa", cid)
+    _chat(alice, "xem pod lần ba", cid)
+    calls = knowledge.provider.calls
+    assert calls[2]["history"][:len(calls[1]["history"])] == calls[1]["history"]
+    assert calls[1]["history"][0]["content"][0]["text"].endswith(f"{calls[0]['turn']}\n</context>")
+
+
+def test_new_knowledge_still_sent(users, knowledge):
+    alice = users["alice"]
+    _, cid = _chat(alice, "xem pod")
+    knowledge.state["kus"].append(_ku(3, "ImagePullBackOff lan nhiều namespace"))
+    knowledge.state["kus"][0] = {**knowledge.state["kus"][0], "content": "pod log 404: lấy pod mới từ ReplicaSet"}
+    _chat(alice, "xem pod tiếp", cid)
+    t2 = knowledge.provider.calls[1]["turn"]
+    assert "ImagePullBackOff lan nhiều namespace" in t2 and "lấy pod mới từ ReplicaSet" in t2
+    assert "0 hit không chứng minh" not in t2 and "[ku:00000002]" in t2
+
+
+def test_playbook_resent_on_task_type_or_revision_change(users, knowledge):
+    alice = users["alice"]
+    _, cid = _chat(alice, "xem pod")
+    _chat(alice, "xem metric cpu", cid)
+    assert 'task_type="observability"' in knowledge.provider.calls[1]["turn"]
+    knowledge.state["files"]["playbooks/k8s_ops.md"] = PLAYBOOK + "\n- [ku:feed0003] mục mới"
+    _chat(alice, "xem pod", cid)
+    assert "mục mới" in knowledge.provider.calls[2]["turn"]
+
+
+def test_turn_without_context_in_history_gets_full_knowledge(users, knowledge):
+    """Lượt phát lại dạng tóm lược (khác provider) hoặc đã bị cắt khỏi ngân sách thì không có <context>: gửi đủ."""
+    alice = users["alice"]
+    _, cid = _chat(alice, "xem pod")
+    with db.session() as conn:
+        conn.execute("UPDATE episode SET transcript=NULL WHERE conversation_id=?", (cid,))
+    _chat(alice, "xem pod lần nữa", cid)
+    t2 = knowledge.provider.calls[1]["turn"]
+    assert 'section="playbook"' in t2 and "pod log 404" in t2 and 'section="recall"' not in t2
+
+
+def test_dedup_can_be_turned_off(users, knowledge, monkeypatch):
+    monkeypatch.setattr(conversation.settings, "knowledge_dedup", False)
+    alice = users["alice"]
+    _, cid = _chat(alice, "xem pod")
+    _chat(alice, "xem pod lần nữa", cid)
+    t1, t2 = (c["turn"] for c in knowledge.provider.calls)
+    assert t1 == t2
+
+
+def test_drop_sent_reads_both_provider_formats():
+    sel = {"task_type": "k8s_ops", "core": "", "playbook": PLAYBOOK, "skill_meta": "", "personal": [], "notes": [], "incident": "",
+           "units": [(_ku(1, "a"), "- [ku:00000001] (lesson) KU 1: a")], "ku_used": []}
+    stable, turn = conversation.render_context(sel)
+    sent = conversation.sent_knowledge([{"role": "user", "content": conversation.task_blocks("q", turn)}])
+    dropped, skipped, ids = conversation.drop_sent(sel, sent)
+    assert dropped["playbook"] == "" and dropped["units"] == [] and ids == [_ku(1, "a")["id"]] and skipped > 0
+    assert conversation.drop_sent(sel, conversation.sent_knowledge([]))[0]["units"] == sel["units"]
+    joined = "\n\n".join(b["text"] for b in conversation.task_blocks("q", turn))  # định dạng OpenAI: content là chuỗi
+    assert conversation.drop_sent(sel, conversation.sent_knowledge([{"role": "user", "content": joined}]))[0]["units"] == []
+    tool_result = [{"type": "tool_result", "tool_use_id": "x", "content": joined}]  # kết quả công cụ không phải tri thức đã gửi
+    assert conversation.drop_sent(sel, conversation.sent_knowledge([{"role": "user", "content": tool_result}]))[0]["units"] == sel["units"]

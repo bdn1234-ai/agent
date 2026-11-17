@@ -6,12 +6,18 @@
 |---|---|---|
 | 0.1 Script đo `scripts/measure_context.py` | Xong | Mốc: 23 hội thoại nhiều lượt, 587.683 ký tự tri thức, 70% đã gửi ở lượt trước; hội thoại dài nhất 16 lượt lặp 82% |
 | 0.2 Trường trace `knowledge_chars`, `skipped_chars`, `skipped_ids` | Xong | Hai trường `skipped_*` luôn là 0 cho tới giai đoạn 2 |
-| 0.3 Golden task | Đã soạn, chưa ghi vào DB | 12 câu từ câu hỏi thật, cả 12 đều đủ từ khóa với context hiện tại; chờ duyệt rồi thêm qua `POST /api/golden` (dữ liệu tenant, không để trong repo) |
+| 0.3 Golden task | Xong | 12 câu từ câu hỏi thật, ghi vào DB của tenant (không để trong repo). Điểm mốc 0,9: đủ từ khóa ở cả 12 câu, phần thiếu do router heuristic xếp sai domain ở 4 câu |
 | 1 `kagent/conversation.py` | Xong | So từng byte trên bản sao dữ liệu thật: 266/266 kết quả `load_history` và `assemble_context` giống code cũ; 773 test xanh |
-| 2 Bỏ phần đã gửi | Chưa làm | |
+| 2 Bỏ phần đã gửi | Xong | Mô phỏng trên 23 hội thoại thật: tri thức gửi giảm 61% (hội thoại dài 197k → 40k ký tự), `ku_used` không đổi, golden giữ 0,9; 780 test xanh. Tắt được bằng `KAGENT_KNOWLEDGE_DEDUP=0` |
 | 3 Bỏ trùng trong lượt | Chưa làm | |
 | 4 Playbook theo độ liên quan | Chưa làm | Cần golden task (0.3) trước |
 | 5 Usage thật | Chưa làm | |
+
+Ghi chú khi triển khai giai đoạn 2:
+
+- Thẻ playbook đổi thành `<knowledge section="playbook" task_type="…" rev="…">`. Lịch sử cũ chưa có `rev`, nên ở lượt đầu tiên sau khi deploy, playbook được gửi lại một lần.
+- KU được tính là đã gửi khi đúng dòng đó (id + nội dung) có trong khối `<context>` của lịch sử đang giữ lại. KU bị sửa thì dòng đổi, nên tự được gửi lại.
+- Khối sự cố được bỏ khi lịch sử đã có đúng khối đó.
 
 Khác với kế hoạch ở giai đoạn 1: không giữ `agent.assemble_context`/`agent.load_history` làm wrapper; `compiler.golden_score`, `incidents/summary.py` và test gọi thẳng `conversation.*`.
 

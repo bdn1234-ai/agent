@@ -5,6 +5,7 @@ lịch sử phát lại nguyên văn và chỉ nối thêm, không sửa lượt
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -20,6 +21,9 @@ APPROVED_RESULT_CHARS = 24000  # tổng cho mọi lệnh đã duyệt của lư�
 _MARKER_LINE = re.compile(r"^\s*\[Lệnh \S+ .*\]\s*$", re.M)
 _UNTRUSTED_TAG = re.compile(r"</?untrusted>")
 _BLANKS = re.compile(r"\n{3,}")
+_CONTEXT = re.compile(r"<context note=.*?</context>", re.S)
+_PLAYBOOK_TAG = re.compile(r'<knowledge section="playbook" task_type="([^"]+)" rev="([0-9a-f]+)">')
+_KU_SHORT = re.compile(r"\[ku:([0-9a-f]{4,12})\]")
 
 
 @dataclass
@@ -34,8 +38,9 @@ class Turn:
 def build_turn(conn, tenant_id: str, task: str, task_type: str, history: dict, *, project=None, user_id=None, entities=None,
                tool_names: list[str] | None = None, incident_id: str | None = None) -> Turn:
     query = f"{history['last_task']} {task}".strip()
+    sent = sent_knowledge(history["messages"]) if settings.knowledge_dedup else None
     ctx = assemble_context(conn, tenant_id, query, task_type, project=project, user_id=user_id, entities=entities,
-                           tool_names=tool_names, incident_id=incident_id)
+                           tool_names=tool_names, incident_id=incident_id, sent=sent)
     stats = {k: ctx[k] for k in ("tokens_est", "has_core", "has_playbook", "knowledge_chars", "skipped_chars", "skipped_ids")}
     return Turn(stable=ctx["stable"], history=history["messages"], turn_context=ctx["turn"], ku_used=ctx["ku_used"], stats=stats)
 
@@ -139,7 +144,7 @@ def select_knowledge(conn, tenant_id: str, task: str, task_type: str, *, project
         from . import incidents
         incident = incidents.context_block(conn, tenant_id, incident_id) or ""
     ids = set(_ku_ids_in(conn, tenant_id, core + playbook)) | chosen_ids | set(personal_ids) | set(note_ids)
-    return {"core": core, "playbook": playbook, "skill_meta": skill_meta, "personal": personal, "units": chosen, "notes": notes,
+    return {"task_type": task_type, "core": core, "playbook": playbook, "skill_meta": skill_meta, "personal": personal, "units": chosen, "notes": notes,
             "incident": incident, "ku_used": sorted(ids)}
 
 
@@ -153,23 +158,87 @@ def render_context(sel: dict) -> tuple[str, str]:
     if sel["skill_meta"]:
         stable.append(f"<skills>\n{sel['skill_meta']}\n</skills>")
     if sel["playbook"]:
-        turn.append(f"<knowledge section=\"playbook\">\n{sel['playbook']}\n</knowledge>")
+        turn.append(f"<knowledge section=\"playbook\" task_type=\"{sel['task_type']}\" rev=\"{_rev(sel['playbook'])}\">\n{sel['playbook']}\n</knowledge>")
     if sel["units"]:
         turn.append("<knowledge section=\"units\">\n" + "\n".join(line for _, line in sel["units"]) + "\n</knowledge>")
     if sel["notes"]:
         turn.append("<knowledge section=\"tools\">\n" + "\n".join(sel["notes"]) + "\n</knowledge>")
     if sel["incident"]:
         turn.append(sel["incident"])
+    if sel.get("recall"):
+        turn.append(f"<knowledge section=\"recall\">Vẫn áp dụng (đã gửi ở lượt trước, xem phía trên): {', '.join(sel['recall'])}</knowledge>")
     return "\n\n".join(stable), "\n\n".join(turn)
 
 
-def assemble_context(conn, tenant_id: str, task: str, task_type: str, **kwargs) -> dict:
+def _rev(playbook: str) -> str:
+    return hashlib.sha256(playbook.encode()).hexdigest()[:8]
+
+
+def _text_of(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type", "text") == "text")
+    return ""
+
+
+def sent_knowledge(messages: list[dict]) -> dict:
+    """Tri thức đã có trong lịch sử sẽ phát lại: lượt bị cắt khỏi ngân sách hay phát lại dạng tóm lược không có <context> nên tự được gửi lại."""
+    playbooks: set[tuple[str, str]] = set()
+    lines: set[str] = set()
+    blocks: list[str] = []
+    for m in messages:
+        if m.get("role") != "user":
+            continue
+        for block in _CONTEXT.findall(_text_of(m.get("content"))):
+            blocks.append(block)
+            playbooks.update(_PLAYBOOK_TAG.findall(block))
+            lines.update(line for line in block.split("\n") if line.startswith("- "))
+    return {"playbooks": playbooks, "lines": lines, "text": "\n".join(blocks)}
+
+
+def drop_sent(sel: dict, sent: dict) -> tuple[dict, int, list[str]]:
+    """Bỏ phần model đã thấy trong lịch sử; KU vẫn liên quan được nhắc lại bằng id. ku_used giữ nguyên để Reflector vẫn chấm các KU này."""
+    out, skipped, ids, recall = dict(sel), 0, [], []
+    if sel["playbook"] and (sel["task_type"], _rev(sel["playbook"])) in sent["playbooks"]:
+        out["playbook"] = ""
+        skipped += len(sel["playbook"])
+        recall.append(f"playbook {sel['task_type']}")
+    units = []
+    for ku, line in sel["units"]:
+        if line in sent["lines"]:
+            skipped += len(line)
+            ids.append(ku["id"])
+            recall.append(f"[ku:{ku['id'][:8]}]")
+        else:
+            units.append((ku, line))
+    out["units"] = units
+    notes = []
+    for line in sel["notes"]:
+        if line in sent["lines"]:
+            skipped += len(line)
+            recall.extend(f"[ku:{short}]" for short in _KU_SHORT.findall(line))
+        else:
+            notes.append(line)
+    out["notes"] = notes
+    if sel["incident"] and sel["incident"] in sent["text"]:
+        out["incident"] = ""
+        skipped += len(sel["incident"])
+    out["recall"] = list(dict.fromkeys(recall))
+    return out, skipped, ids
+
+
+def assemble_context(conn, tenant_id: str, task: str, task_type: str, *, sent: dict | None = None, **kwargs) -> dict:
+    """sent: tri thức đã có trong lịch sử (sent_knowledge); None thì gửi đủ, như golden_score chấm từng câu riêng lẻ."""
     sel = select_knowledge(conn, tenant_id, task, task_type, **kwargs)
+    skipped, skipped_ids = 0, []
+    if sent is not None:
+        sel, skipped, skipped_ids = drop_sent(sel, sent)
     stable, turn = render_context(sel)
     text = "\n\n".join(p for p in (stable, turn) if p)
     return {"text": text, "stable": stable, "turn": turn, "ku_used": sel["ku_used"], "units": [ku for ku, _ in sel["units"]],
             "tokens_est": len(text) // 4, "has_core": bool(sel["core"]), "has_playbook": bool(sel["playbook"]),
-            "knowledge_chars": len(turn), "skipped_chars": 0, "skipped_ids": []}
+            "knowledge_chars": len(turn), "skipped_chars": skipped, "skipped_ids": skipped_ids}
 
 
 # --- Lịch sử ---
