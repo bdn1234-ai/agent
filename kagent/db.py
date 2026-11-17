@@ -421,7 +421,7 @@ def row(r: sqlite3.Row | None, *json_fields: str) -> dict | None:
     d = dict(r)
     for f in json_fields:
         if d.get(f) is not None:
-            d[f] = json.loads(d[f])
+            d[f] = json.loads(d[f], parse_constant=lambda _: None)  # trace cũ có thể chứa NaN/Infinity, không trả được qua JSON
     return d
 
 

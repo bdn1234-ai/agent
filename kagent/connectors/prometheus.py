@@ -4,6 +4,7 @@ Kết quả được rút gọn trước khi trả cho agent: chuỗi theo thờ
 """
 from __future__ import annotations
 
+import math
 import time
 
 from .base import ConnectorError, call, integer, monitoring_client, need
@@ -32,9 +33,10 @@ def ping(p, args=None):
 
 def _num(v):
     try:
-        return float(v)
+        x = float(v)
     except (TypeError, ValueError):
         return None
+    return x if math.isfinite(x) else None  # Prometheus trả "NaN"/"+Inf"; NaN trong JSON làm API trả lỗi
 
 
 def _stats(values: list) -> dict:

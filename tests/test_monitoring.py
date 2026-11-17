@@ -23,6 +23,24 @@ def test_prometheus_reads_and_compacts():
         prometheus.query(PROM, {"expr": "bad("})
 
 
+def test_prometheus_stats_skip_nan_and_inf():
+    s = prometheus._stats([[1, "NaN"], [2, "3"], [3, "+Inf"], [4, "1"]])
+    assert s == {"points": 4, "min": 1.0, "max": 3.0, "avg": 2.0, "last": 1.0}
+    assert prometheus._stats([[1, "NaN"]]) == {"points": 1}
+
+
+def test_row_turns_stored_nan_into_null():
+    import json
+    import sqlite3
+    from kagent import db
+    c = sqlite3.connect(":memory:")
+    c.row_factory = sqlite3.Row
+    r = c.execute("SELECT ? AS trace", ('[{"min": NaN, "max": Infinity}]',)).fetchone()
+    d = db.row(r, "trace")
+    assert d["trace"] == [{"min": None, "max": None}]
+    json.dumps(d, allow_nan=False)
+
+
 def test_prometheus_alerts_rules_targets_labels():
     assert [a["alertname"] for a in prometheus.list_alerts(PROM, {"state": "firing"})["alerts"]] == ["HighCPU"]
     rules = prometheus.list_rules(PROM, {"only_firing": True})["rules"]
