@@ -4,7 +4,7 @@ import json
 import pytest
 
 from conftest import tool_steps
-from kagent import agent, compiler, db, knowledge, learned, llm
+from kagent import agent, compiler, conversation, db, knowledge, learned, llm
 
 
 def run_three(user, tasks):
@@ -220,8 +220,8 @@ def test_profile_injected_into_context_for_owner_only(users):
     alice.put("/api/me/profile", tenant=False, json={"instructions": "Luôn kết thúc bằng tóm tắt", "style": "detailed", "default_env": "dev"})
     with db.session() as conn:
         ids = {r["username"]: r["id"] for r in conn.execute("SELECT id, username FROM app_user")}
-        mine = agent.assemble_context(conn, alice.tenant, "xem pod", "k8s_ops", user_id=ids["alice"])
-        theirs = agent.assemble_context(conn, alice.tenant, "xem pod", "k8s_ops", user_id=ids["bob"])
+        mine = conversation.assemble_context(conn, alice.tenant, "xem pod", "k8s_ops", user_id=ids["alice"])
+        theirs = conversation.assemble_context(conn, alice.tenant, "xem pod", "k8s_ops", user_id=ids["bob"])
     assert "Luôn kết thúc bằng tóm tắt" in mine["text"] and "chi tiết" in mine["text"] and "<user_preferences" in mine["text"]
     assert "tóm tắt" not in theirs["text"]
 
@@ -286,7 +286,7 @@ def test_tool_notes_learned_from_errors_are_loaded(users):
     lesson = next(k for k in alice.get("/api/ku?kind=lesson").json() if "tool:k8s.kubectl_read" in k["entities"])
     admin.post(f"/api/ku/{lesson['id']}/review", json={"approve": True})
     with db.session() as conn:
-        ctx = agent.assemble_context(conn, alice.tenant, "tạo dashboard", "observability", tool_names=["k8s.kubectl_read", "k8s.kubectl_write"])
+        ctx = conversation.assemble_context(conn, alice.tenant, "tạo dashboard", "observability", tool_names=["k8s.kubectl_read", "k8s.kubectl_write"])
     assert '<knowledge section="tools">' in ctx["text"] and "k8s.kubectl_read" in ctx["text"] and lesson["id"] in ctx["ku_used"]
 
 

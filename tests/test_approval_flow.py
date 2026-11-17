@@ -1,7 +1,7 @@
 """Duyệt lệnh: grant theo phiên, lệnh cùng loại, agent tự chạy tiếp sau khi duyệt."""
 import json
 
-from kagent import agent, db, gateway
+from kagent import agent, conversation, db, gateway
 from test_chat import chat, done
 
 # Lệnh đọc R1 ở prod của tenant mẫu phải hỏi (auto_execute=read_only), nên dùng để dựng lệnh chờ duyệt.
@@ -90,7 +90,7 @@ def test_new_message_skips_pending_of_earlier_turns_like_claude_code(users):
     r = alice.post(f"/api/approvals/{step['approval_id']}/decide", json={"action": "approve_once"})
     assert r.status_code == 409
     with db.session() as conn:
-        history = agent.load_history(conn, alice.tenant, cid)
+        history = conversation.load_history(conn, alice.tenant, cid)
     assert any("bị bỏ qua vì người dùng nhắn tiếp" in m["content"] for m in history["messages"] if isinstance(m.get("content"), str))
     assert not any("logs.search_logs" in i for i in history["intent"])  # bỏ qua không phải ý duyệt hay từ chối của người dùng
     card = next(m for m in alice.get(f"/api/conversations/{cid}").json()["messages"] if m["id"] == message["id"])["approvals"][0]
@@ -117,7 +117,7 @@ def test_history_carries_full_result_of_latest_approved_commands(users):
     big = {"status": "ok", "result": {"hits": [{"request_id": f"req-{i:04d}", "message": "x" * 40} for i in range(60)]}}
     with db.session() as conn:
         conn.execute("UPDATE approval_request SET status='approved', result=? WHERE id=?", (json.dumps(big), step["approval_id"]))
-        history = agent.load_history(conn, alice.tenant, cid)
+        history = conversation.load_history(conn, alice.tenant, cid)
     last = history["messages"][-1]["content"]
     # Trước đây chỉ 300 ký tự đầu của kết quả vào lịch sử, nên agent không bao giờ thấy các bản ghi sau.
     assert "req-0059" in last and "<untrusted>" in last and "đã cắt" not in last
@@ -139,7 +139,7 @@ def test_deny_with_note_lets_agent_continue_with_it(users):
     cid, message, approval = _pending_write(alice)
     alice.post(f"/api/approvals/{approval['id']}/decide", json={"action": "deny", "reason": "kiểm tra số pod trước khi scale"})
     with db.session() as conn:
-        history = agent.load_history(conn, alice.tenant, cid)
+        history = conversation.load_history(conn, alice.tenant, cid)
     note = history["messages"][-1]["content"]
     assert "người dùng từ chối, ghi chú: kiểm tra số pod trước khi scale" in note and "gọi lại công cụ" in note
     assert any(i.startswith("[người dùng từ chối lệnh] k8s.kubectl_write") and "kiểm tra số pod" in i for i in history["intent"])
@@ -154,7 +154,7 @@ def test_deny_without_note_stops(users):
     r = alice.post("/api/chat", json={"continue_episode": message["id"], "conversation_id": cid})
     assert r.status_code == 409 and "ghi chú" in r.text
     with db.session() as conn:
-        assert "không kèm ghi chú" in agent.load_history(conn, alice.tenant, cid)["messages"][-1]["content"]
+        assert "không kèm ghi chú" in conversation.load_history(conn, alice.tenant, cid)["messages"][-1]["content"]
 
 
 def test_approve_with_note_reaches_agent_after_result(users):
@@ -163,7 +163,7 @@ def test_approve_with_note_reaches_agent_after_result(users):
     out = alice.post(f"/api/approvals/{approval['id']}/decide", json={"action": "approve_once", "reason": "xong thì kiểm tra rollout status"}).json()
     assert out["status"] == "approved" and out["note"] == "xong thì kiểm tra rollout status"
     with db.session() as conn:
-        note = agent.load_history(conn, alice.tenant, cid)["messages"][-1]["content"]
+        note = conversation.load_history(conn, alice.tenant, cid)["messages"][-1]["content"]
     assert "đã duyệt và chạy" in note and note.rstrip().endswith("ghi chú của người duyệt: xong thì kiểm tra rollout status")
 
 

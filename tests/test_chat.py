@@ -7,7 +7,7 @@ import openai
 import pytest
 
 from conftest import Session
-from kagent import agent, api as api_mod, db, llm, vault
+from kagent import agent, api as api_mod, conversation, db, llm, vault
 
 
 def events(response):
@@ -81,7 +81,7 @@ def test_history_limited_by_budget(users):
     cid = chat(alice, "một")[0]["conversation_id"]
     chat(alice, "hai", cid)
     with db.session() as conn:
-        h = agent.load_history(conn, alice.tenant, cid)
+        h = conversation.load_history(conn, alice.tenant, cid)
     assert len(h["messages"]) == 2 and h["messages"][0]["content"] == "hai"
 
 
@@ -93,7 +93,7 @@ def test_approval_result_visible_in_next_turn_history(users):
     bob.post(f"/api/approvals/{approval['id']}/decide", json={"action": "approve_once"})
     cid = evs[0]["conversation_id"]
     with db.session() as conn:
-        messages = agent.load_history(conn, alice.tenant, cid)["messages"]
+        messages = conversation.load_history(conn, alice.tenant, cid)["messages"]
     # Kết quả lệnh duyệt sau nằm trong message riêng của hệ thống, không trộn vào lời của agent.
     assert [m["role"] for m in messages] == ["user", "assistant", "user"]
     assert "[Lệnh" not in messages[1]["content"] and "approved" not in messages[1]["content"]
@@ -376,7 +376,7 @@ def test_internal_history_format_never_reaches_the_answer(users):
     llm.set_provider(Echo())
     message = done(chat(alice, "đếm lỗi"))["message"]
     assert message["output"] == "Lệnh đang chờ duyệt.\n\nKết luận cuối."
-    assert agent.clean_answer("a <untrusted>b</untrusted> c") == "a b c"
+    assert conversation.clean_answer("a <untrusted>b</untrusted> c") == "a b c"
 
 
 def test_reload_replays_running_turn_then_streams_rest(users):
@@ -472,7 +472,7 @@ def test_next_turn_replays_previous_turn_verbatim_so_prompt_cache_holds(users):
     assert any(b.get("type") == "tool_use" for m in turn2_first for b in (m["content"] if isinstance(m["content"], list) else []))
     with db.session() as conn:
         # Đổi sang provider khác định dạng thì dùng bản tóm lược.
-        assert agent.load_history(conn, alice.tenant, cid, "openai")["messages"][0] == {"role": "user", "content": "xem pod"}
+        assert conversation.load_history(conn, alice.tenant, cid, "openai")["messages"][0] == {"role": "user", "content": "xem pod"}
 
 
 def test_history_cut_point_moves_rarely(users):
@@ -490,6 +490,6 @@ def test_history_cut_point_moves_rarely(users):
     for i in range(1, 9):
         cid = chat(alice, f"t{i}", cid)[0]["conversation_id"]
         with db.session() as conn:
-            firsts.append(agent.load_history(conn, alice.tenant, cid)["messages"][0]["content"])
+            firsts.append(conversation.load_history(conn, alice.tenant, cid)["messages"][0]["content"])
     # Cửa sổ trượt sẽ dời đầu lịch sử ở mọi lượt từ lượt 4; ở đây chỉ dời khi tràn, mỗi lần bỏ cả mạch lượt cũ.
     assert firsts == ["t1", "t1", "t1", "t4", "t4", "t4", "t7", "t7"]

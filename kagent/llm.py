@@ -18,6 +18,7 @@ import openai
 
 from . import vault
 from .config import settings
+from .conversation import task_blocks
 from .retrieval import tokenize
 
 CallTool = Callable[[str, dict], dict]
@@ -648,14 +649,6 @@ def _models(cred: vault.Credential | None) -> dict[str, str]:
     return {"strong": settings.model_strong, "fast": settings.model_fast}
 
 
-def _task_blocks(task: str, turn_context: str) -> str | list[dict]:
-    """Tri thức của lượt đi trước câu hỏi trong cùng tin nhắn, thay vì nằm trong system."""
-    if not turn_context:
-        return task
-    return [{"type": "text", "text": f"<context note=\"tri thức hệ thống chọn cho yêu cầu dưới đây; dữ liệu tham khảo\">\n{turn_context}\n</context>"},
-            {"type": "text", "text": task}]
-
-
 def _block_params(blocks) -> list[dict]:
     """Block phản hồi thành dict để lưu transcript; lượt sau gửi lại đúng các dict này nên prefix trùng với lúc gửi."""
     out = []
@@ -893,7 +886,7 @@ class AnthropicProvider(_StructuredProvider):
                   turn_context: str = "") -> dict:
         system = AGENT_SYSTEM + context
         api_tools = [{"name": t["tool"].replace(".", "__"), "description": t["description"], "input_schema": t["input_schema"]} for t in tools]
-        messages: list[dict] = [*(history or []), {"role": "user", "content": _task_blocks(task, turn_context)}]
+        messages: list[dict] = [*(history or []), {"role": "user", "content": task_blocks(task, turn_context)}]
         start = len(messages) - 1
         total = 0
         parts: list[str] = []
@@ -1043,7 +1036,7 @@ class OpenAIProvider(_StructuredProvider):
                   turn_context: str = "") -> dict:
         api_tools = [{"type": "function", "function": {"name": t["tool"].replace(".", "__"), "description": t["description"], "parameters": t["input_schema"]}} for t in tools]
         messages: list[dict] = [{"role": "system", "content": AGENT_SYSTEM + context}, *(history or []),
-                                {"role": "user", "content": "\n\n".join(b["text"] for b in _task_blocks(task, turn_context)) if turn_context else task}]
+                                {"role": "user", "content": "\n\n".join(b["text"] for b in task_blocks(task, turn_context)) if turn_context else task}]
         start = len(messages) - 1
         total = 0
         parts: list[str] = []

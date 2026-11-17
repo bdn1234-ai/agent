@@ -334,7 +334,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE episode ADD COLUMN conversation_id TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_episode_conversation ON episode(conversation_id, started_at)")
     if "transcript" not in {r["name"] for r in conn.execute("PRAGMA table_info(episode)")}:
-        conn.execute("ALTER TABLE episode ADD COLUMN transcript TEXT")  # tin nhắn đã gửi model ở lượt này, phát lại nguyên văn ở lượt sau (agent.load_history)
+        conn.execute("ALTER TABLE episode ADD COLUMN transcript TEXT")  # tin nhắn đã gửi model ở lượt này, phát lại nguyên văn ở lượt sau (conversation.load_history)
     if "self_approve" not in {r["name"] for r in conn.execute("PRAGMA table_info(tenant)")}:
         # Mặc định người yêu cầu tự duyệt lệnh của mình; admin có thể tắt cho tenant cần duyệt chặt.
         conn.execute("ALTER TABLE tenant ADD COLUMN self_approve INTEGER NOT NULL DEFAULT 1")

@@ -154,7 +154,7 @@ def generate(conn, tenant_id: str) -> tuple[dict[str, str], list[dict]]:
 
 
 def golden_score(conn, tenant_id: str, files: dict[str, str]) -> float | None:
-    from . import agent, llm
+    from . import conversation, llm
     tasks = conn.execute("SELECT * FROM golden_task WHERE tenant_id=?", (tenant_id,)).fetchall()
     if not tasks:
         return None
@@ -163,7 +163,7 @@ def golden_score(conn, tenant_id: str, files: dict[str, str]) -> float | None:
     for t in tasks:
         terms = json.loads(t["expect_terms"])
         route = provider.route(t["query"])
-        ctx = agent.assemble_context(conn, tenant_id, t["query"], route["task_type"], files=files)
+        ctx = conversation.assemble_context(conn, tenant_id, t["query"], route["task_type"], files=files)
         words = set(tokenize(ctx["text"]))
         hit = sum(1 for term in terms if all(p in words for p in tokenize(term))) / len(terms) if terms else 1.0
         points += 0.3 * (route["task_type"] == t["expect_domain"]) + 0.7 * hit

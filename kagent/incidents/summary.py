@@ -70,7 +70,7 @@ ACTION_STATUS = {"ok": "đã chạy", "pending": "đang chờ duyệt", "expired
 
 
 def _summary_input(conn, inc) -> dict:
-    from .. import agent
+    from ..conversation import clean_answer
     from .actions import rows
     from .views import timeline  # views đọc summary_view: nhập muộn để tránh vòng
     alerts = [dict(r) for r in conn.execute("SELECT * FROM alert_event WHERE incident_id=? ORDER BY starts_at", (inc["id"],)).fetchall()]
@@ -80,7 +80,7 @@ def _summary_input(conn, inc) -> dict:
     for ep in conn.execute("SELECT user_id, started_at, input, trace FROM episode WHERE conversation_id=? ORDER BY started_at", (inc["conversation_id"],)).fetchall():
         texts = [s["text"] for s in json.loads(ep["trace"]) if s.get("type") == "text"]
         turns.append({"at": ep["started_at"], "by": "kagent điều tra tự động" if ep["user_id"] == bot else "người vận hành",
-                      "request": str(json.loads(ep["input"]).get("task") or "")[:400], "answer": agent.clean_answer(texts[-1] if texts else "")[-1500:]})
+                      "request": str(json.loads(ep["input"]).get("task") or "")[:400], "answer": clean_answer(texts[-1] if texts else "")[-1500:]})
     actions = []
     for a in rows(conn, inc["id"]):
         status = a["status"]
