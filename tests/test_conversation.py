@@ -234,3 +234,36 @@ def test_history_remembers_last_user_task(users):
         conn.execute(f"INSERT INTO episode({','.join(row)}) VALUES ({','.join('?' * len(row))})", tuple(row.values()))
         h = conversation.load_history(conn, alice.tenant, cid)
     assert h["last_user_task"] == "xem pod kafka" and h["last_task"] == "hệ thống tiếp tục"
+
+
+# --- Công cụ đọc SKILL.md ---
+
+SKILL = "---\nname: k8s_ops-workflow\ndescription: Quy trình k8s đã kiểm chứng\n---\n\n# k8s_ops-workflow\n\n1. Xem rollout history trước"
+
+
+class SkillReader(Recording):
+    def run_agent(self, task, context, tools, call_tool, history=None, on_text=None, cancelled=None, turn_context=""):
+        self.tools = tools
+        self.context = context
+        self.steps = [call_tool(conversation.SKILL_TOOL, {"name": "k8s_ops-workflow"}), call_tool(conversation.SKILL_TOOL, {"name": "khong-co"})]
+        return super().run_agent(task, context, tools, call_tool, history, on_text, cancelled, turn_context)
+
+
+def test_agent_reads_skill_body(users, knowledge):
+    knowledge.state["files"]["skills/k8s_ops-workflow/SKILL.md"] = SKILL
+    provider = SkillReader()
+    llm.set_provider(provider)
+    _chat(users["alice"], "xem pod")
+    tool = next(t for t in provider.tools if t["tool"] == conversation.SKILL_TOOL)
+    assert tool["input_schema"]["properties"]["name"]["enum"] == ["k8s_ops-workflow"]
+    assert "read_skill" in provider.context and "k8s_ops-workflow: Quy trình k8s" in provider.context
+    ok, bad = provider.steps
+    assert ok["status"] == "ok" and "rollout history" in ok["result"]["content"]
+    assert bad["status"] == "invalid" and "k8s_ops-workflow" in bad["reasons"][0]
+
+
+def test_no_skill_tool_without_skills(users, knowledge):
+    provider = SkillReader()
+    llm.set_provider(provider)
+    _chat(users["alice"], "xem pod")
+    assert all(t["tool"] != conversation.SKILL_TOOL for t in provider.tools) and "<skills" not in provider.context

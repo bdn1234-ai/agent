@@ -8,8 +8,8 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import replace
 
-from . import connections, db, gateway, learned, live, llm, results
-from .conversation import build_turn, clean_answer, load_history
+from . import compiler, connections, db, gateway, learned, live, llm, results
+from .conversation import SKILL_TOOL, build_turn, clean_answer, load_history, skill_files
 from .tools import callable_by
 
 
@@ -52,6 +52,9 @@ ASK_DESCRIPTION = ("Hỏi người dùng khi cần họ quyết định mà khô
                    "và thêm \"(khuyên dùng)\" vào cuối nhãn. Giao diện tự thêm ô \"Khác\" để người dùng tự gõ, đừng tự liệt kê. "
                    "Không dùng để hỏi xin phép chạy lệnh: gọi thẳng công cụ, gateway sẽ hỏi duyệt khi cần. "
                    "Gọi xong thì kết thúc lượt bằng một câu ngắn; câu trả lời đến ở lượt sau.")
+
+SKILL_DESCRIPTION = ("Đọc toàn bộ quy trình của một skill trong danh sách <skills>. Gọi khi nhiệm vụ khớp mô tả của skill, "
+                     "trước khi bắt tay làm, rồi làm theo các bước trong đó.")
 
 
 FILTER_SCHEMA = {
@@ -153,6 +156,8 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
     allowed: set[str] = set()  # read_only: chỉ công cụ đã cho agent thấy, chặn cả tên model tự bịa ra
 
     asked: list[dict] = []
+    files: dict[str, str] = {}
+    skills: dict[str, str] = {}  # tên skill -> đường dẫn SKILL.md trong bản đã publish
 
     def run_one(c, name: str, args: dict) -> dict:
         if name == ASK_TOOL and not read_only:
@@ -169,6 +174,13 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
         if asked:
             step = {"type": "tool_call", "tool": name, "args": args, "env": env, "decision": "blocked", "status": "blocked",
                     "reasons": ["đang đợi người dùng trả lời câu hỏi; kết thúc lượt"]}
+            emit({"type": "tool_end", "step": step})
+            return step
+        if name == SKILL_TOOL:
+            path = skills.get(str(args.get("name", "")))
+            step = {"type": "tool_call", "tool": SKILL_TOOL, "args": args, "env": env, "decision": "allowed",
+                    "status": "ok" if path else "invalid", "result": {"content": files[path]} if path else None,
+                    "reasons": [] if path else [f"không có skill này; skill hiện có: {', '.join(sorted(skills)) or '(không có)'}"]}
             emit({"type": "tool_end", "step": step})
             return step
         if read_only and name not in allowed:
@@ -190,6 +202,8 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
             return run_one(c, name, args)
 
     def is_read(name: str) -> bool:
+        if name == SKILL_TOOL:
+            return True
         r = conn.execute("SELECT action_class FROM tool_registry WHERE tenant_id=? AND tool=?", (tenant_id, name)).fetchone()
         return bool(r and r["action_class"] == "read")
 
@@ -272,9 +286,14 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
         if not read_only:
             tool_list += learned.for_agent(conn, tenant_id, user_id, env, roles)
             tool_list.append({"tool": ASK_TOOL, "description": ASK_DESCRIPTION, "input_schema": ASK_SCHEMA, "canonical": ASK_TOOL, "action_class": "read"})
+        files.update(compiler.read_published(tenant_id))
+        skills.update(skill_files(files))
+        if skills:
+            tool_list.append({"tool": SKILL_TOOL, "description": SKILL_DESCRIPTION, "action_class": "read", "canonical": SKILL_TOOL,
+                              "input_schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "enum": sorted(skills)}}}})
         allowed.update(t["tool"] for t in tool_list)
         turn = build_turn(conn, tenant_id, task, task_type, history, project=project, user_id=user_id, entities=entities,
-                          tool_names=[t["tool"] for t in tool_list], incident_id=incident_id, continuation=bool(continuation_of))
+                          tool_names=[t["tool"] for t in tool_list], incident_id=incident_id, continuation=bool(continuation_of), files=files)
         ku_used = turn.ku_used
         trace.append({"type": "context", "ku_used": ku_used, **turn.stats})
         emit({"type": "context", "task_type": task_type, "ku_used": len(ku_used)})

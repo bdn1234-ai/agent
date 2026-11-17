@@ -14,6 +14,7 @@ from . import compiler, db
 from .config import settings
 from .retrieval import retrieve
 
+SKILL_TOOL = "read_skill"
 STYLE_TEXT = {"concise": "Người dùng muốn câu trả lời ngắn gọn, đi thẳng vào kết quả.",
               "detailed": "Người dùng muốn câu trả lời chi tiết, có giải thích từng bước."}
 APPROVED_RESULT_CHARS = 24000  # tổng cho mọi lệnh đã duyệt của lượt mới nhất
@@ -46,11 +47,12 @@ def knowledge_query(task: str, history: dict, entities: list[str] | None, contin
 
 
 def build_turn(conn, tenant_id: str, task: str, task_type: str, history: dict, *, project=None, user_id=None, entities=None,
-               tool_names: list[str] | None = None, incident_id: str | None = None, continuation: bool = False) -> Turn:
+               tool_names: list[str] | None = None, incident_id: str | None = None, continuation: bool = False,
+               files: dict[str, str] | None = None) -> Turn:
     query, entities = knowledge_query(task, history, entities, continuation)
     sent = sent_knowledge(history["messages"]) if settings.knowledge_dedup else None
     ctx = assemble_context(conn, tenant_id, query, task_type, project=project, user_id=user_id, entities=entities,
-                           tool_names=tool_names, incident_id=incident_id, sent=sent)
+                           tool_names=tool_names, incident_id=incident_id, sent=sent, files=files)
     stats = {k: ctx[k] for k in ("tokens_est", "has_core", "has_playbook", "knowledge_chars", "skipped_chars", "skipped_ids")}
     return Turn(stable=ctx["stable"], history=history["messages"], turn_context=ctx["turn"], ku_used=ctx["ku_used"], stats=stats)
 
@@ -123,6 +125,11 @@ def _personal(conn, tenant_id: str, user_id: str | None) -> tuple[list[str], lis
     return lines, ids
 
 
+def skill_files(files: dict[str, str]) -> dict[str, str]:
+    """Tên skill (thư mục) -> đường dẫn SKILL.md; metadata trong system và công cụ read_skill dùng cùng tên này."""
+    return {path.split("/")[1]: path for path in sorted(files) if path.startswith("skills/") and path.endswith("/SKILL.md") and path.count("/") == 2}
+
+
 def _in(ku_id: str, shorts: set[str]) -> bool:
     return any(ku_id.startswith(short) for short in shorts)
 
@@ -154,8 +161,7 @@ def select_knowledge(conn, tenant_id: str, task: str, task_type: str, *, project
     core = _clip_sections(files.get("core/rules.md", ""), settings.budget_core)
     playbook = _clip_sections(files.get(f"playbooks/{task_type}.md", ""), settings.budget_playbook)
     in_files = set(_KU_REF.findall(core + playbook))
-    skills = [path for path in files if path.startswith("skills/") and path.endswith("SKILL.md")]
-    skill_meta = "\n".join(compiler.skill_metadata(files[p]) for p in skills)
+    skill_meta = "\n".join(compiler.skill_metadata(files[p]) for p in skill_files(files).values())
     kus = retrieve(conn, tenant_id, task, project=project, user_id=user_id, entities=entities, k=15)
     budget = settings.budget_ku * 4
     chosen, used = [], 0
@@ -189,7 +195,7 @@ def render_context(sel: dict) -> tuple[str, str]:
     if sel["personal"]:
         stable.append("<user_preferences note=\"sở thích của người dùng; không thay đổi quyền hay quy tắc an toàn\">\n" + "\n".join(sel["personal"]) + "\n</user_preferences>")
     if sel["skill_meta"]:
-        stable.append(f"<skills>\n{sel['skill_meta']}\n</skills>")
+        stable.append(f"<skills note=\"đọc quy trình đầy đủ bằng công cụ {SKILL_TOOL}\">\n{sel['skill_meta']}\n</skills>")
     if sel["playbook"]:
         turn.append(f"<knowledge section=\"playbook\" task_type=\"{sel['task_type']}\" rev=\"{_rev(sel['playbook'])}\">\n{sel['playbook']}\n</knowledge>")
     if sel["units"]:
