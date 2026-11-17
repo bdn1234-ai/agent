@@ -274,7 +274,7 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
             tool_list.append({"tool": ASK_TOOL, "description": ASK_DESCRIPTION, "input_schema": ASK_SCHEMA, "canonical": ASK_TOOL, "action_class": "read"})
         allowed.update(t["tool"] for t in tool_list)
         turn = build_turn(conn, tenant_id, task, task_type, history, project=project, user_id=user_id, entities=entities,
-                          tool_names=[t["tool"] for t in tool_list], incident_id=incident_id)
+                          tool_names=[t["tool"] for t in tool_list], incident_id=incident_id, continuation=bool(continuation_of))
         ku_used = turn.ku_used
         trace.append({"type": "context", "ku_used": ku_used, **turn.stats})
         emit({"type": "context", "task_type": task_type, "ku_used": len(ku_used)})

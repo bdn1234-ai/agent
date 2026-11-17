@@ -194,3 +194,43 @@ def test_drop_sent_reads_both_provider_formats():
     assert conversation.drop_sent(sel, conversation.sent_knowledge([{"role": "user", "content": joined}]))[0]["units"] == []
     tool_result = [{"type": "tool_result", "tool_use_id": "x", "content": joined}]  # kết quả công cụ không phải tri thức đã gửi
     assert conversation.drop_sent(sel, conversation.sent_knowledge([{"role": "user", "content": tool_result}]))[0]["units"] == sel["units"]
+
+
+# --- Bỏ trùng trong cùng lượt, cắt theo mục, câu tìm KU ---
+
+def test_ku_in_playbook_not_repeated_in_units(users, knowledge):
+    knowledge.state["files"]["playbooks/k8s_ops.md"] = PLAYBOOK + "\n- [ku:00000001 ✓2 ✗0] pod log 404 do ReplicaSet mới"
+    first, _ = _chat(users["alice"], "xem pod")
+    t1 = knowledge.provider.calls[0]["turn"]
+    units = t1.split('section="units"')[1]
+    assert "- [ku:00000001] (lesson) KU 1: (nội dung ở playbook)" in units and "0 hit không chứng minh" in units
+    assert t1.count("pod log 404 do ReplicaSet mới") == 1
+    ctx = next(s for s in conversation_trace(first) if s["type"] == "context")
+    assert _ku(1, "")["id"] in ctx["ku_used"]
+
+
+def test_clip_sections_keeps_whole_sections():
+    text = "# t\n\n## A\n" + "a" * 30 + "\n## B\n" + "b" * 200 + "\n## C\nc"
+    clipped = conversation._clip_sections(text, 20)
+    assert clipped == "# t\n\n## A\n" + "a" * 30 + "\n## C\nc"
+    assert conversation._clip_sections("x\n" * 100, 10) == conversation._clip("x\n" * 100, 10)
+    assert conversation._clip_sections(text, 1000) == text
+
+
+def test_knowledge_query_skips_system_continuation():
+    hist = {"last_task": "Người dùng đã quyết định...", "last_user_task": "sửa cấu hình kafka", "last_user_entities": ["kafka"]}
+    assert conversation.knowledge_query("Người dùng đã quyết định...", hist, ["lệnh chờ duyệt"], True) == ("sửa cấu hình kafka", ["kafka"])
+    assert conversation.knowledge_query("MR cho cả A+B", hist, ["MR"], False) == ("sửa cấu hình kafka MR cho cả A+B", ["MR"])
+    assert conversation.knowledge_query("xem pod", {"last_user_task": ""}, None, True) == ("xem pod", None)
+
+
+def test_history_remembers_last_user_task(users):
+    alice = users["alice"]
+    first, cid = _chat(alice, "xem pod kafka")
+    with db.session() as conn:  # episode chỉ được thêm, không sửa: chép lượt đầu thành một lượt tiếp sau duyệt
+        row = dict(conn.execute("SELECT * FROM episode WHERE id=?", (first["id"],)).fetchone())
+        row.update(id="cont-1", started_at=row["started_at"] + "Z",
+                   input=json.dumps({**json.loads(row["input"]), "task": "hệ thống tiếp tục", "continuation_of": first["id"]}))
+        conn.execute(f"INSERT INTO episode({','.join(row)}) VALUES ({','.join('?' * len(row))})", tuple(row.values()))
+        h = conversation.load_history(conn, alice.tenant, cid)
+    assert h["last_user_task"] == "xem pod kafka" and h["last_task"] == "hệ thống tiếp tục"

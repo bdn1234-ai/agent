@@ -24,6 +24,7 @@ _BLANKS = re.compile(r"\n{3,}")
 _CONTEXT = re.compile(r"<context note=.*?</context>", re.S)
 _PLAYBOOK_TAG = re.compile(r'<knowledge section="playbook" task_type="([^"]+)" rev="([0-9a-f]+)">')
 _KU_SHORT = re.compile(r"\[ku:([0-9a-f]{4,12})\]")
+_KU_REF = re.compile(r"\[ku:([0-9a-f]{4,12})")  # playbook ghi kèm điểm: [ku:id ✓3 ✗0]
 
 
 @dataclass
@@ -35,9 +36,18 @@ class Turn:
     stats: dict = field(default_factory=dict)
 
 
+def knowledge_query(task: str, history: dict, entities: list[str] | None, continuation: bool) -> tuple[str, list[str] | None]:
+    """Câu tìm KU ghép câu người dùng gần nhất: câu trả lời cho câu hỏi của agent ("MR cho cả A+B+C+D") cần chủ đề của câu trước.
+    Lượt tiếp sau duyệt là lời hệ thống, ghép vào chỉ kéo về KU về chờ duyệt, nên tìm theo câu và entity của người dùng."""
+    anchor = history.get("last_user_task", "")
+    if continuation and anchor:
+        return anchor, history.get("last_user_entities") or None
+    return f"{anchor} {task}".strip(), entities
+
+
 def build_turn(conn, tenant_id: str, task: str, task_type: str, history: dict, *, project=None, user_id=None, entities=None,
-               tool_names: list[str] | None = None, incident_id: str | None = None) -> Turn:
-    query = f"{history['last_task']} {task}".strip()
+               tool_names: list[str] | None = None, incident_id: str | None = None, continuation: bool = False) -> Turn:
+    query, entities = knowledge_query(task, history, entities, continuation)
     sent = sent_knowledge(history["messages"]) if settings.knowledge_dedup else None
     ctx = assemble_context(conn, tenant_id, query, task_type, project=project, user_id=user_id, entities=entities,
                            tool_names=tool_names, incident_id=incident_id, sent=sent)
@@ -62,9 +72,25 @@ def _clip(text: str, budget_tokens: int) -> str:
     return text[:limit].rsplit("\n", 1)[0]
 
 
+def _clip_sections(text: str, budget_tokens: int) -> str:
+    """Giữ trọn từng mục `##` còn vừa ngân sách, bỏ mục quá dài và đi tiếp: mục bị cắt giữa chừng mất phần đuôi mà không ai biết."""
+    limit = budget_tokens * 4
+    if len(text) <= limit:
+        return text
+    head, *sections = re.split(r"\n(?=## )", text)
+    if len(head) > limit or not sections:
+        return _clip(text, budget_tokens)
+    kept, used = [head], len(head)
+    for sec in sections:
+        if used + 1 + len(sec) <= limit:
+            kept.append(sec)
+            used += 1 + len(sec)
+    return "\n".join(kept) if len(kept) > 1 else _clip(text, budget_tokens)
+
+
 def _ku_ids_in(conn, tenant_id: str, text: str) -> list[str]:
     out = []
-    for short in sorted(set(re.findall(r"\[ku:([0-9a-f]{4,12})", text))):
+    for short in sorted(set(_KU_REF.findall(text))):
         r = conn.execute("SELECT id FROM knowledge_unit WHERE tenant_id=? AND id LIKE ?", (tenant_id, short + "%")).fetchone()
         if r:
             out.append(r["id"])
@@ -97,7 +123,11 @@ def _personal(conn, tenant_id: str, user_id: str | None) -> tuple[list[str], lis
     return lines, ids
 
 
-def _tool_notes(conn, tenant_id: str, tool_names: list[str], skip: set[str]) -> tuple[list[str], list[str]]:
+def _in(ku_id: str, shorts: set[str]) -> bool:
+    return any(ku_id.startswith(short) for short in shorts)
+
+
+def _tool_notes(conn, tenant_id: str, tool_names: list[str], skip: set[str], in_files: set[str] = frozenset()) -> tuple[list[str], list[str]]:
     """Bài học về từng công cụ được nạp kèm danh sách công cụ: công cụ tự bổ sung cách dùng qua thời gian."""
     lines, ids, used = [], [], 0
     for name in tool_names:
@@ -106,7 +136,7 @@ def _tool_notes(conn, tenant_id: str, tool_names: list[str], skip: set[str]) -> 
                           "ORDER BY helpful_cnt - harmful_cnt DESC, recorded_at DESC LIMIT 2",
                           (tenant_id, db.iso(), f'%"tool:{_escape_like(name)}"%')).fetchall()
         for r in rs:
-            if r["id"] in skip or r["id"] in ids:
+            if r["id"] in skip or r["id"] in ids or _in(r["id"], in_files):
                 continue
             line = f"- {name} [ku:{r['id'][:8]}]: {r['content']}"
             if used + len(line) > 600 * 4:
@@ -121,15 +151,18 @@ def select_knowledge(conn, tenant_id: str, task: str, task_type: str, *, project
                      files: dict[str, str] | None = None, tool_names: list[str] | None = None, incident_id: str | None = None) -> dict:
     """Ngân sách cố định: core, sở thích cá nhân, playbook, KU, ghi chú công cụ; Skill chỉ nạp metadata."""
     files = compiler.read_published(tenant_id) if files is None else files
-    core = _clip(files.get("core/rules.md", ""), settings.budget_core)
-    playbook = _clip(files.get(f"playbooks/{task_type}.md", ""), settings.budget_playbook)
+    core = _clip_sections(files.get("core/rules.md", ""), settings.budget_core)
+    playbook = _clip_sections(files.get(f"playbooks/{task_type}.md", ""), settings.budget_playbook)
+    in_files = set(_KU_REF.findall(core + playbook))
     skills = [path for path in files if path.startswith("skills/") and path.endswith("SKILL.md")]
     skill_meta = "\n".join(compiler.skill_metadata(files[p]) for p in skills)
     kus = retrieve(conn, tenant_id, task, project=project, user_id=user_id, entities=entities, k=15)
     budget = settings.budget_ku * 4
     chosen, used = [], 0
     for ku in kus:
-        line = f"- [ku:{ku['id'][:8]}] ({ku['kind']}) {ku['title']}: {ku['content']}"
+        # Playbook chỉ ghi nội dung, nên KU đã có ở đó vẫn giữ tiêu đề và điều kiện áp dụng, bỏ phần nội dung trùng.
+        content = "(nội dung ở playbook)" if _in(ku["id"], in_files) else ku["content"]
+        line = f"- [ku:{ku['id'][:8]}] ({ku['kind']}) {ku['title']}: {content}"
         if ku.get("applies_when"):
             line += f" (áp dụng: {ku['applies_when']})"
         if used + len(line) > budget:
@@ -138,7 +171,7 @@ def select_knowledge(conn, tenant_id: str, task: str, task_type: str, *, project
         used += len(line) + 1
     personal, personal_ids = _personal(conn, tenant_id, user_id)
     chosen_ids = {ku["id"] for ku, _ in chosen}
-    notes, note_ids = _tool_notes(conn, tenant_id, tool_names or [], chosen_ids | set(personal_ids))
+    notes, note_ids = _tool_notes(conn, tenant_id, tool_names or [], chosen_ids | set(personal_ids), in_files)
     incident = ""
     if incident_id:
         from . import incidents
@@ -284,7 +317,7 @@ def load_history(conn, tenant_id: str, conversation_id: str | None, fmt: str | N
     Lượt có transcript cùng định dạng provider (fmt) được phát lại nguyên văn, kể cả lệnh công cụ, như lúc gửi model;
     lượt khác dùng bản tóm lược câu hỏi + câu trả lời. Lịch sử chỉ nối thêm để prompt cache của lượt trước còn dùng được.
     """
-    empty = {"messages": [], "intent": [], "calls": [], "last_task": ""}
+    empty = {"messages": [], "intent": [], "calls": [], "last_task": "", "last_user_task": "", "last_user_entities": []}
     if not conversation_id:
         return empty
     rs = conn.execute("SELECT * FROM episode WHERE tenant_id=? AND conversation_id=? ORDER BY started_at DESC, rowid DESC LIMIT 200",
@@ -315,7 +348,8 @@ def load_history(conn, tenant_id: str, conversation_id: str | None, fmt: str | N
         decided = [f"[người dùng {'đã duyệt' if a['status'] == 'approved' else 'từ chối'} lệnh] {a['tool']} {json.dumps(a['args'], ensure_ascii=False)}"
                    + (f", ghi chú: {a['note'] or a['deny_reason']}" if a["note"] or a["deny_reason"] else "")
                    for a in approvals if a["status"] in ("approved", "denied")]
-        turns.append({"task": ep["input"]["task"], "messages": messages, "size": len(json.dumps(messages, ensure_ascii=False)),
+        turns.append({"task": ep["input"]["task"], "continuation": bool(ep["input"].get("continuation_of")), "entities": ep["input"].get("entities") or [],
+                      "messages": messages, "size": len(json.dumps(messages, ensure_ascii=False)),
                       "intent": [ep["input"]["task"], *decided],
                       "calls": [{"tool": s["tool"], "args": s.get("args"), "status": s.get("status")} for s in ep["trace"] if s.get("type") == "tool_call"]})
     # Vượt ngân sách thì bỏ một mạch lượt cũ tới còn nửa ngân sách, để điểm cắt (đầu prefix) chỉ dời thỉnh thoảng
@@ -328,5 +362,7 @@ def load_history(conn, tenant_id: str, conversation_id: str | None, fmt: str | N
                 used -= turns[start]["size"]
                 start += 1
     kept = turns[start:]
+    user_turn = next((t for t in reversed(kept) if not t["continuation"]), None)
     return {"messages": [m for t in kept for m in t["messages"]], "intent": [i for t in kept for i in t["intent"]],
-            "calls": [c for t in kept for c in t["calls"]], "last_task": kept[-1]["task"] if kept else ""}
+            "calls": [c for t in kept for c in t["calls"]], "last_task": kept[-1]["task"] if kept else "",
+            "last_user_task": user_turn["task"] if user_turn else "", "last_user_entities": user_turn["entities"] if user_turn else []}
