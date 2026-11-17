@@ -15,7 +15,7 @@ services:
     image: kagent:local
     restart: unless-stopped
     ports:
-      - "${KAGENT_BIND:-127.0.0.1}:${KAGENT_PORT:-8000}:8000"  # KAGENT_BIND=0.0.0.0 để máy khác trong LAN truy cập
+      - "${KAGENT_BIND:-0.0.0.0}:${KAGENT_PORT:-8000}:8000"  # KAGENT_BIND=0.0.0.0 để máy khác trong LAN truy cập
     environment:
       # Khóa chủ để ngoài volume dữ liệu, để bản sao dữ liệu không kèm khóa giải mã LLM key.
       KAGENT_SECRET_KEY: ${KAGENT_SECRET_KEY:?đặt KAGENT_SECRET_KEY trong .env}
