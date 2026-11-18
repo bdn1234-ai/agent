@@ -488,11 +488,13 @@ def test_approval_updates_incident_at_once_and_timeline_shows_fix(flow, users, i
     ran = next(e for e in inc["timeline"] if e["kind"] == "ran")
     assert (ran["who"], ran["text"]) == ("admin duyệt", "kubectl_write rollout restart deployment/web -n default → deployment.apps/web restarted")
     assert ran["action_id"] == inc["actions"][0]["id"] and ran["actor"] == inc["actions"][0]["decided_by"]
+    assert (ran["title"], ran["cmd"], ran["result"]) == ("Khởi động lại", "kubectl_write rollout restart deployment/web -n default", "deployment.apps/web restarted")
     assert not any(e["kind"] == "proposed" for e in inc["timeline"])  # chỉ hiện lệnh đã thực sự chạy
     proposed = _recorded(iid, "proposed")
     assert proposed["actor"] == "kagent" and proposed["text"].startswith("kubectl_write rollout restart") and "→ cần duyệt" in proposed["text"]
     investigated = next(e for e in inc["timeline"] if e["kind"] == "investigated")
-    assert investigated["who"] == "kagent · điều tra lần 1" and investigated["text"] == "1 lệnh đọc → image lỗi (độ tin 0.60)"
+    assert investigated["who"] == "kagent · điều tra lần 1" and investigated["text"] == "1 lệnh đọc → Image lỗi (độ tin 0.60)"
+    assert (investigated["title"], investigated["result"]) == ("Image lỗi", "1 lệnh đọc · độ tin 0.60")
     assert not any("bắt đầu điều tra" in t for t in texts) and inc["cause"]["round"] == 1 and inc["cause"]["text"] == "image lỗi"
     infra.am_alerts[:] = infra.am_alerts[:1]
     with db.session() as conn:
@@ -955,3 +957,53 @@ def test_timeline_hides_old_dry_run_rows(flow, users):
     with db.session() as conn:  # dữ liệu cũ: lệnh chạy thử từng được ghi như lệnh đã chạy
         conn.execute("UPDATE incident_action SET args=? WHERE id=?", (json.dumps({"command": "rollout restart deployment/web --dry-run=server"}), action["id"]))
     assert not any(e.get("action_id") for e in flow.get(f"/api/incidents/{iid}").json()["timeline"])
+
+
+def test_timeline_attaches_change_check_and_hides_sandbox_scripts(flow, users):
+    iid = _web_incident(users)
+    llm.set_provider(Reporting(0.6, [RESTART], verdict=False))
+    with db.session() as conn:
+        incidents.investigate(conn, tenant(users), iid)
+    action = flow.get(f"/api/incidents/{iid}").json()["actions"][0]
+    flow.post(f"/api/approvals/{action['approval_id']}/decide", json={"action": "approve_once"})
+    with db.session() as conn:
+        t = tenant(users)
+        for cid, args in (("c1", RESTART["args"]), ("c2", {"command": "apply -f - --dry-run=server"})):
+            conn.execute("INSERT INTO change_record(id, tenant_id, approval_id, incident_id, user_id, env, tool, args, recipe, plan, status, check_result, created_at) "
+                         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", (cid, t, action["approval_id"] if cid == "c1" else None, iid, "u", "dev", RESTART["tool"],
+                                                                 json.dumps(args), "r", "{}", "ok", json.dumps({"ready": True, "detail": "deployment/web 1/1 sẵn sàng"}), db.iso()))
+            incidents.common._event(conn, t, iid, "change_checked", "Kiểm tra sau khi chạy …: ổn", {"change_id": cid}, actor="system")
+        incidents.actions._insert(conn, t, iid, "investigation", "u", {"tool": "data.script", "args": {"code": "result = 1"}, "status": "ok", "result": {"result": 1}},
+                                  None, None)
+    tl = flow.get(f"/api/incidents/{iid}").json()["timeline"]
+    assert not any(e["kind"] == "change_checked" for e in tl)  # gắn vào lệnh; kiểm tra của lệnh chạy thử thì bỏ
+    ran = [e for e in tl if e["kind"] == "ran"]
+    assert len(ran) == 1 and ran[0]["check"]["ok"] and ran[0]["check"]["text"] == "deployment/web 1/1 sẵn sàng"
+
+
+def test_action_view_reads_gitlab_writes():
+    from kagent.incidents.present import action_view
+    commit = {"tool": "gl.api_admin", "status": "ok", "why": "Tạo nhánh fix/x và sửa values. Chi tiết khác.",
+              "args": json.dumps({"method": "POST", "path": "/projects/1/repository/commits", "body": {
+                  "branch": "fix/x", "commit_message": "fix: nới probe\n\nthân dài", "actions": [{"action": "update", "file_path": "values.yaml", "content": "x" * 5000}]}}),
+              "result": '{"status": 201, "json": {"id": "8a2db5b3aaaa", "short_id": "8a2db5b3", "title": "fix: nới', "result_line": '{"status": 201, "json"'}
+    v = action_view(commit)
+    assert v["title"] == "Commit «fix: nới probe» lên nhánh fix/x (values.yaml)" and v["cmd"] == "POST /projects/1/repository/commits"
+    assert v["result"] == "HTTP 201 · commit 8a2db5b3" and v["why"] == "Tạo nhánh fix/x và sửa values" and v["detail"].endswith("…")
+    mr = {**commit, "args": json.dumps({"method": "POST", "path": "/projects/1/merge_requests", "body": {"title": "fix: nới", "source_branch": "fix/x", "target_branch": "main"}}),
+          "result": '{"status": 201, "json": {"id": 5, "iid": 783, "title"'}
+    assert (action_view(mr)["title"], action_view(mr)["result"]) == ("Mở MR «fix: nới» (fix/x → main)", "HTTP 201 · !783")
+    patch = {"tool": "k8s.kubectl_write", "status": "error", "why": None, "result_line": "Error from server (NotFound)",
+             "args": json.dumps({"command": "patch sts web -n a --type=json -p '[{\"op\":\"replace\"}]'"})}
+    v = action_view(patch)
+    assert v["title"] == v["cmd"] == "kubectl_write patch sts web -n a --type=json …" and v["result"] == "lỗi: Error from server (NotFound)"
+
+
+def test_cause_parts_splits_run_on_paragraph():
+    from kagent.incidents.present import cause_parts, headline
+    text = ("Chưa chắc chắn hoàn toàn. Bằng chứng cho thấy probe timeout 1s quá ngắn (scrape ~2,1s). Hệ quả: flower restart 32 lần. "
+            "Chưa đọc được ngưỡng của rule CPUThrottlingHigh.")
+    assert cause_parts(text) == {"hedge": "Chưa chắc chắn hoàn toàn", "lead": "Probe timeout 1s quá ngắn (scrape ~2,1s).",
+                                 "points": ["Hệ quả: flower restart 32 lần."], "gaps": ["Chưa đọc được ngưỡng của rule CPUThrottlingHigh."]}
+    assert headline(text) == "Probe timeout 1s quá ngắn (scrape ~2,1s)"
+    assert cause_parts("image lỗi") == {"hedge": None, "lead": "Image lỗi", "points": [], "gaps": []} and cause_parts("") is None

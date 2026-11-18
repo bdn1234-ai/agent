@@ -7,8 +7,9 @@ import threading
 
 from .. import db, live
 from .actions import act
-from .common import IncidentError, first_sentence, _event, _lock, _running, _slots, _waiting
+from .common import IncidentError, _event, _lock, _running, _slots, _waiting
 from .config import bot_user
+from .present import headline
 from .grouping import _brief
 
 log = logging.getLogger("kagent.incidents")
@@ -139,7 +140,7 @@ def _investigate_run(conn, tenant_id: str, incident_id: str, inc, user: str, tas
                       json.dumps(report["evidence"], ensure_ascii=False), ep["id"], now, incident_id))
         n = conn.execute("SELECT investigations FROM incident WHERE id=?", (incident_id,)).fetchone()["investigations"]
         _event(conn, tenant_id, incident_id, "investigated",
-               f"{len(steps)} lệnh đọc → {first_sentence(report['root_cause']) or 'chưa rõ nguyên nhân'} (độ tin {report['confidence']:.2f})",
+               f"{len(steps)} lệnh đọc → {headline(report['root_cause']) or 'chưa rõ nguyên nhân'} (độ tin {report['confidence']:.2f})",
                {"episode_id": ep["id"], "steps": len(steps), "round": n}, actor="kagent")
     return act(conn, tenant_id, incident_id, report, user, ep["id"], alerts, steps)
 

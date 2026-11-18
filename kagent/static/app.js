@@ -320,6 +320,24 @@ const EV_MARK = { alert: "alert", alert_resolved: "clear", resolved: "clear", re
   change_checked: "clear", change_check_failed: "fail", reverted: "human", revert_failed: "fail" };
 const EV_FILTERS = [["all", "Tất cả"], ["action", "Hành động"], ["agent", "Điều tra"], ["alert", "Cảnh báo"]];
 
+// Lệnh và lượt điều tra: việc đã làm bằng lời, lệnh gọn một dòng, kết quả và kiểm tra sau khi chạy; tham số đầy đủ gập lại.
+function evBody(e) {
+  const k = e.check;
+  return [h("span", { class: "ix-title" }, e.title),
+    e.cmd && e.cmd !== e.title && h("code", { class: "ix-cmd", title: e.cmd }, e.cmd),
+    (e.result || k) && h("span", { class: "ix-out" + (e.kind === "failed" ? " bad" : "") }, e.result && "→ " + e.result,
+      k && h("span", { class: "pill " + (k.ok ? "ok" : k.ok === false ? "bad" : ""), title: k.at ? "kiểm tra lúc " + hmd(k.at) : "" },
+        (k.ok ? "kiểm tra sau: ổn" : k.ok === false ? "kiểm tra sau: lỗi" : "kiểm tra sau: không rõ") + (k.text ? " · " + k.text : ""))),
+    (e.why || e.detail) && h("details", { class: "ix-more" }, h("summary", {}, "Lý do và tham số"),
+      e.why && h("p", { class: "small" }, e.why), e.detail && h("pre", { class: "ix-args" }, e.detail))];
+}
+
+function causeBody(p) {
+  const list = (cls, label, items) => items.length > 0 && h("div", { class: cls }, h("div", { class: "ix-cause-h" }, label), h("ul", {}, items.map((x) => h("li", {}, inlineMd(x)))));
+  return [h("p", { class: "ix-lead" }, p.hedge && h("span", { class: "pill warn" }, p.hedge), " ", inlineMd(p.lead)),
+    list("ix-points", "Diễn biến và bằng chứng", p.points), list("ix-gaps", "Chưa xác nhận", p.gaps)];
+}
+
 async function incidentDetail(main, id) {
   const token = ++incidentTimer;
   const box = h("div", { class: "ix" });
@@ -438,7 +456,7 @@ async function incidentDetail(main, id) {
         if (dm(e.at) !== day) { day = dm(e.at); kids.push(h("li", { class: "ix-day" }, "Ngày " + day)); }
         kids.push(h("li", { class: "ix-ev" }, h("time", { datetime: e.at, title: fmtTime(e.at) }, hm(e.at)),
           h("div", { class: "ix-mark " + (EV_MARK[e.kind] || "") }, h("span", {})),
-          h("div", { class: "ix-body" }, h("span", { class: "ix-who" }, e.who), h("span", { class: "ix-res" }, e.text))));
+          h("div", { class: "ix-body" }, h("span", { class: "ix-who" }, e.who), e.title ? evBody(e) : h("span", { class: "ix-res" }, e.text))));
       }
       tl.replaceChildren(...(kids.length ? kids : [h("li", { class: "small muted" }, "Chưa có sự kiện.")]));
     };
@@ -475,7 +493,7 @@ async function incidentDetail(main, id) {
       h("div", { class: "ix-sec" }, h("h3", { id: "ix-c-h" }, "Nguyên nhân"),
         c && h("span", { class: "small" }, [c.round ? `lượt điều tra ${c.round}` : null, c.at ? hmd(c.at) : null, `độ tin ${(c.confidence || 0).toFixed(2)}`].filter(Boolean).join(" · "))),
       busyNow ? busy(d.queued === "slot" ? "Đang chờ tới lượt điều tra…" : "Agent đang điều tra bằng các lệnh chỉ đọc…") : null,
-      c ? [h("p", {}, c.text || "Chưa rõ nguyên nhân."),
+      c ? [c.parts ? causeBody(c.parts) : h("p", {}, "Chưa rõ nguyên nhân."),
         h("details", {}, h("summary", {}, `${c.steps} lệnh đọc và bằng chứng`),
           c.evidence.length ? h("ul", { class: "small" }, c.evidence.map((e) => h("li", {}, e))) : h("p", { class: "small" }, "Không có bằng chứng được ghi."),
           d.conversation_id && h("a", { href: "#", class: "small", onclick: (e) => { e.preventDefault(); go("chat", d.conversation_id); } }, "Từng lệnh và câu trả lời đầy đủ ở hội thoại điều tra"))]

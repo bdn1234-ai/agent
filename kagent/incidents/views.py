@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from .. import db
 from . import actions, tasks
@@ -9,6 +10,7 @@ from .common import BOT, STAGE_LABEL, IncidentError, _cmd, first_sentence, _wors
 from .config import settings
 from .grouping import merged_from, related
 from .investigate import queued
+from .present import GAP, HIDDEN_TOOLS, action_view, cause_parts, headline
 from .summary import summary_view
 
 
@@ -53,6 +55,9 @@ SHOWN_EVENTS = ("investigated", "verified", "resolved", "reopened", "closed", "t
                 "change_checked", "change_check_failed", "reverted", "revert_failed")  # kiểm tra sau khi chạy và hoàn tác (undo.py)
 
 
+INVESTIGATED = re.compile(r"^(?P<steps>\d+) lệnh đọc → (?P<cause>.*) \(độ tin (?P<conf>[\d.]+)\)$", re.S)  # câu do investigate.py ghi
+
+
 def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
     """Nhật ký xử lý sự cố: cảnh báo bắt đầu/hết theo giờ thật, rồi các sự kiện đã ghi lúc việc xảy ra (nhận định, lệnh, quyết định, xác minh).
 
@@ -70,6 +75,8 @@ def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
     rounds = 0
     dry = {r["id"] for r in conn.execute("SELECT id, args FROM incident_action WHERE incident_id=? AND args LIKE '%--dry-run%'", (inc["id"],))
            if actions.is_dry_run(json.loads(r["args"] or "null"))}  # dữ liệu cũ trước khi lệnh chạy thử thôi được ghi
+    acts = {a["id"]: a for a in actions.rows(conn, inc["id"])}
+    ran: dict[str, dict] = {}
     for e in conn.execute("SELECT at, kind, text, data, actor, action_id FROM incident_event WHERE incident_id=? AND kind IN (%s) ORDER BY id"
                           % ",".join("?" * len(SHOWN_EVENTS)), (inc["id"], *SHOWN_EVENTS)).fetchall():
         e = dict(e)
@@ -79,6 +86,19 @@ def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
         if e["kind"] == "investigated":
             rounds += 1
             e["data"].setdefault("round", rounds)  # sự kiện ghi trước khi có số lượt
+            if m := INVESTIGATED.match(e["text"]):
+                e["title"], e["result"] = m["cause"], f"{m['steps']} lệnh đọc · độ tin {m['conf']}"
+                if e["data"]["round"] == inc["investigations"] and GAP.match(m["cause"]):  # sự kiện cũ chỉ ghi câu rào đón
+                    e["title"] = headline(inc["cause"] or inc["root_cause"]) or m["cause"]
+        a = acts.get(e["action_id"])
+        if a:
+            if a["tool"] in HIDDEN_TOOLS:
+                continue
+            e.update(action_view(a))
+            if e["kind"] in ("ran", "failed"):
+                ran[a["id"]] = e
+        if e["kind"] in ("change_checked", "change_check_failed") and _attach_check(conn, e, acts, ran):
+            continue
         out.append(e)
     names: dict[str, str] = {}
 
@@ -92,6 +112,30 @@ def timeline(conn, inc: dict, alerts: list[dict]) -> list[dict]:
         e["cat"] = EVENT_CAT.get(e["kind"], "agent")
         e.pop("data", None)
     return sorted(out, key=lambda e: e["at"] or "")
+
+
+def _attach_check(conn, e: dict, acts: dict[str, dict], ran: dict[str, dict]) -> bool:
+    """Kiểm tra sau khi chạy hiện ngay dưới lệnh của nó thay vì thành dòng riêng; kiểm tra của lệnh chạy thử thì bỏ.
+
+    change_record không giữ id của incident_action nên nối theo thẻ duyệt, không có thì theo cùng tool và tham số.
+    """
+    ch = conn.execute("SELECT approval_id, tool, args, check_result FROM change_record WHERE id=?", (e["data"].get("change_id"),)).fetchone()
+    if ch is None:
+        return False
+    args = json.loads(ch["args"] or "null")
+    if actions.is_dry_run(args):
+        return True
+    a = next((acts[i] for i in reversed(list(ran)) if ch["approval_id"] and acts[i]["approval_id"] == ch["approval_id"]), None) or next(
+        (acts[i] for i in reversed(list(ran)) if acts[i]["tool"] == ch["tool"] and json.loads(acts[i]["args"] or "null") == args), None)
+    if a is None:
+        return False
+    res = json.loads(ch["check_result"] or "{}")
+    if e["kind"] == "change_check_failed":
+        ok = False
+    else:
+        ok = None if res.get("ready") is None and res.get("detail") else True  # ready=None kèm lỗi: chưa đọc được trạng thái, không phải ổn
+    ran[a["id"]]["check"] = {"ok": ok, "text": res.get("detail") or "", "at": e["at"]}
+    return True
 
 
 EVENT_CAT = {"alert": "alert", "alert_resolved": "alert", "resolved": "alert", "reopened": "alert",
@@ -178,7 +222,7 @@ def get(conn, tenant_id: str, incident_id: str) -> dict:
     d["tasks_done"] = [{"text": t["text"], "done_at": t["done_at"], "done_by": _username(conn, t["done_by"]), "task_id": t["id"]}
                        for t in tasks.current(conn, incident_id) if t["done_at"]]
     d["cause"] = {"text": d["cause"] or d["root_cause"], "at": d["cause_at"], "round": d["investigations"], "confidence": d["confidence"],
-                  "evidence": d["evidence"], "steps": len(d["steps"])} if d["episode_id"] else None
+                  "evidence": d["evidence"], "steps": len(d["steps"]), "parts": cause_parts(d["cause"] or d["root_cause"])} if d["episode_id"] else None
     return d
 
 
