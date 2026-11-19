@@ -1593,6 +1593,7 @@ function llmUsageChart(t) {
 
 function tokenSection(t) {
   if (!t) return null;
+  const wrote = (r) => r.cache_write_1h ? h("span", { title: "Phần ghi với TTL 1 giờ, giá ghi 2× input thay vì 1,25×" }, num(r.cache_write), h("span", { class: "small muted" }, ` (1h: ${num(r.cache_write_1h)})`)) : num(r.cache_write);
   const all = t.by_purpose.reduce((a, r) => a + r.input + r.cache_read + r.cache_write + r.output, 0);
   const table = (head, rows) => h("div", { class: "card scroll" }, h("table", {}, h("thead", {}, h("tr", {}, head.map((x) => h("th", {}, x)))), h("tbody", {}, rows)));
   return h("div", {},
@@ -1602,7 +1603,7 @@ function tokenSection(t) {
         t.cache_unmeasured ? h("span", { class: "small muted", title: "Dịch vụ LLM không trả số token cache (vd. vLLM chưa bật --enable-prompt-tokens-details), nên không tính vào tỷ lệ" },
           `chưa tính ${num(t.cache_unmeasured)} token input từ LLM không báo cache`) : null)),
     table(["Mục đích", "Lần gọi", "Input", "Cache đọc", "Cache ghi", "Output"], t.by_purpose.map((r) =>
-      h("tr", {}, h("td", {}, PURPOSE[r.purpose] || r.purpose), h("td", {}, num(r.calls)), h("td", {}, num(r.input)), h("td", {}, num(r.cache_read)), h("td", {}, num(r.cache_write)), h("td", {}, num(r.output))))),
+      h("tr", {}, h("td", {}, PURPOSE[r.purpose] || r.purpose), h("td", {}, num(r.calls)), h("td", {}, num(r.input)), h("td", {}, num(r.cache_read)), h("td", {}, wrote(r)), h("td", {}, num(r.output))))),
     knowledgeSection(t.knowledge),
     h("h2", { class: "row" }, "Token theo LLM, 14 ngày qua"),
     h("p", { class: "small" }, "Tổng token xử lý mỗi ngày (input, cache đọc/ghi, output), chia theo cấu hình LLM và model. Rê chuột lên cột để xem chi tiết."),
@@ -1611,7 +1612,7 @@ function tokenSection(t) {
       const inp = r.input + r.cache_read + r.cache_write;
       const hit = r.cache_known === 0 ? h("span", { class: "muted", title: "Dịch vụ không trả số token cache" }, "không đo được")
         : inp ? Math.round(1000 * r.cache_read / inp) / 10 + "%" : "—";
-      return h("tr", {}, h("td", {}, r.label), h("td", {}, num(r.calls)), h("td", {}, num(r.input)), h("td", {}, num(r.cache_read)), h("td", {}, num(r.cache_write)),
+      return h("tr", {}, h("td", {}, r.label), h("td", {}, num(r.calls)), h("td", {}, num(r.input)), h("td", {}, num(r.cache_read)), h("td", {}, wrote(r)),
         h("td", {}, hit), h("td", {}, num(r.output)), h("td", {}, num(r.total)));
     })),
     h("h2", { class: "row" }, "Công cụ trả kết quả lớn nhất"),

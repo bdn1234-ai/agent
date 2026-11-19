@@ -59,7 +59,7 @@ def test_openai_cached_tokens_are_split_out():
         assert p._tokens(resp) == 1050
         assert p._tokens(NS(usage=resp.usage)) == 1050  # phản hồi stream không có tên model: lấy model đã gọi
     assert got[0] == {"purpose": "other", "model": "gpt-x", "input_tokens": 200, "output_tokens": 50, "cache_read": 800, "cache_write": 0, "llm": "LLM nội bộ",
-                      "cache_known": True}
+                      "cache_known": True, "cache_write_1h": 0}
     assert got[1]["model"] == "gpt-x"
 
 
@@ -210,3 +210,32 @@ def test_metrics_report_knowledge_sent_and_skipped(users):
     assert k["tokens"] >= ctx["knowledge_chars"] // 4 * 2 and k["agent_input"] >= 4000
     row = next(r for r in t["top_turns"] if r["id"] == ep["id"])
     assert row["knowledge_chars"] == ctx["knowledge_chars"] and row["skipped_chars"] == ctx["skipped_chars"]
+
+
+def test_tenant_route_key_goes_into_metadata_user_id():
+    p, fake = provider([msg([text("a")]), msg([text("b")]), msg([text("c")]), msg([text("d")])])
+    with llm.collect_usage("tenant-a"):
+        p.run_agent("x", "", [], lambda n, a: {})
+        p.run_agent("y", "", [], lambda n, a: {})
+    with llm.collect_usage("tenant-b"):
+        p.run_agent("z", "", [], lambda n, a: {})
+    with llm.collect_usage():
+        p.run_agent("w", "", [], lambda n, a: {})
+    keys = [c.get("metadata", {}).get("user_id") for c in fake.calls]
+    assert keys[0] == keys[1] and keys[2] not in (None, keys[0]) and keys[3] is None
+    assert "tenant-a" not in keys[0]
+    assert fake.calls[0]["fallbacks"] == "default"  # metadata không làm mất fallback phía server
+
+
+def test_one_hour_cache_writes_are_recorded_and_reported(users):
+    alice = users["alice"]
+    u = NS(**vars(usage(10, 5, 0, 900)), cache_creation=NS(ephemeral_1h_input_tokens=700, ephemeral_5m_input_tokens=200))
+    p, _ = provider([NS(content=[text("ok")], stop_reason="end_turn", usage=u, model="claude-opus-5")])
+    with llm.collect_usage(alice.tenant) as got:
+        p.run_agent("x", "", [], lambda n, a: {})
+    assert got[0]["cache_write"] == 900 and got[0]["cache_write_1h"] == 700
+    with db.session() as conn:
+        llm.save_usage(conn, alice.tenant, None, got)
+    t = alice.get("/api/metrics").json()["tokens"]
+    assert [(r["cache_write"], r["cache_write_1h"]) for r in t["by_purpose"]] == [(900, 700)]
+    assert t["by_llm"][0]["cache_write_1h"] == 700

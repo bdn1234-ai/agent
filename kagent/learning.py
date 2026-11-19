@@ -193,7 +193,7 @@ def run_learning(conn, tenant_id: str, limit: int = 50) -> dict:
         processed, errors = [], []
         for r in rs:
             episode = db.row(r, "input", "trace", "ku_used", "human_edit")
-            with llm.collect_usage() as usage:
+            with llm.collect_usage(tenant_id) as usage:
                 try:
                     processed.append(process_episode(conn, tenant_id, provider, episode))
                 except llm.LLMError as exc:

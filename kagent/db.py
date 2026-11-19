@@ -352,6 +352,9 @@ def init_schema(conn: sqlite3.Connection) -> None:
         # 0: dịch vụ không báo token cache (vd. vLLM tắt prompt_tokens_details). Dữ liệu cũ: chỉ Claude và lời gọi có số cache là chắc có báo.
         conn.execute("ALTER TABLE llm_call ADD COLUMN cache_known INTEGER NOT NULL DEFAULT 1")
         conn.execute("UPDATE llm_call SET cache_known=0 WHERE cache_read=0 AND cache_write=0 AND coalesce(model,'') NOT LIKE 'claude%'")
+    if "cache_write_1h" not in {r["name"] for r in conn.execute("PRAGMA table_info(llm_call)")}:
+        # phần của cache_write ghi với TTL 1h (giá 2× thay vì 1,25×); dữ liệu cũ không tách được nên để 0
+        conn.execute("ALTER TABLE llm_call ADD COLUMN cache_write_1h INTEGER NOT NULL DEFAULT 0")
     if "grant_policy" not in {r["name"] for r in conn.execute("PRAGMA table_info(tenant)")}:
         conn.execute("ALTER TABLE tenant ADD COLUMN grant_policy TEXT NOT NULL DEFAULT '{}'")
     approval_sql = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='approval_request'").fetchone()["sql"]

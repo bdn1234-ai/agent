@@ -1032,7 +1032,7 @@ def _run_consolidation(job_id: str, tenant_id: str) -> None:
         provider = llm.get_provider()
 
         def one(index: int, batch: list[dict]) -> None:
-            with llm.collect_usage() as usage:
+            with llm.collect_usage(tenant_id) as usage:
                 try:
                     part, error = provider.consolidate(batch), None
                 except llm.LLMError as exc:
@@ -1925,7 +1925,8 @@ def token_metrics(conn, tid: str, days: int = 7) -> dict:
     """Token theo mục đích, tỷ lệ cache, công cụ trả kết quả lớn nhất và các lượt tốn nhất trong N ngày."""
     since = db.iso(db.now() - timedelta(days=days))
     by_purpose = db.rows(conn.execute(
-        "SELECT purpose, count(*) calls, sum(input_tokens) input, sum(output_tokens) output, sum(cache_read) cache_read, sum(cache_write) cache_write "
+        "SELECT purpose, count(*) calls, sum(input_tokens) input, sum(output_tokens) output, sum(cache_read) cache_read, sum(cache_write) cache_write, "
+        "sum(cache_write_1h) cache_write_1h "
         "FROM llm_call WHERE tenant_id=? AND at>=? GROUP BY purpose ORDER BY sum(input_tokens+cache_read+cache_write+output_tokens) DESC", (tid, since)).fetchall())
     # Tỷ lệ cache chỉ tính trên lời gọi có báo token cache; phần không báo tách riêng thay vì kéo tỷ lệ về 0.
     known = conn.execute("SELECT coalesce(sum(CASE WHEN cache_known=1 THEN input_tokens+cache_read+cache_write END),0) total_in, "
@@ -1979,7 +1980,7 @@ def llm_usage(conn, tid: str, days: int = 14) -> dict:
     label = "CASE WHEN llm IS NULL OR llm='' THEN coalesce(nullif(model,''),'(không rõ)') ELSE llm || ' · ' || coalesce(nullif(model,''),'?') END"
     total = "input_tokens+cache_read+cache_write+output_tokens"
     by_llm = db.rows(conn.execute(
-        f"SELECT {label} label, count(*) calls, sum(input_tokens) input, sum(cache_read) cache_read, sum(cache_write) cache_write, "
+        f"SELECT {label} label, count(*) calls, sum(input_tokens) input, sum(cache_read) cache_read, sum(cache_write) cache_write, sum(cache_write_1h) cache_write_1h, "
         f"sum(output_tokens) output, sum({total}) total, min(at) first_at, min(cache_known) cache_known FROM llm_call WHERE tenant_id=? AND substr(at,1,10)>=? "
         f"GROUP BY label ORDER BY total DESC", (tid, since)).fetchall())
     daily = db.rows(conn.execute(

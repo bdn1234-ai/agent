@@ -100,7 +100,7 @@ def run_task(conn, tenant_id: str, user_id: str, task: str, env: str = "dev", pr
              continuation_of: str | None = None, read_only: bool = False) -> dict:
     """Chạy một lượt và ghi số token của từng lần gọi LLM vào llm_call để đo chi phí. read_only: agent chỉ thấy công cụ đọc."""
     episode_id = episode_id or db.new_id()
-    with llm.collect_usage() as usage:
+    with llm.collect_usage(tenant_id) as usage:
         try:
             return _run_task(conn, tenant_id, user_id, task, env, project, agent_id, conversation_id, episode_id, on_event, cancelled, continuation_of,
                              read_only)

@@ -116,7 +116,7 @@ def summarize(conn, tenant_id: str, incident_id: str, basis: str | None = None) 
         _summary_failed[incident_id] = basis
         raise IncidentError("tenant đã hết quota token trong ngày", 429)
     data = _summary_input(conn, inc)
-    with llm.collect_usage() as usage:
+    with llm.collect_usage(tenant_id) as usage:
         try:
             out = llm.get_provider().incident_summary(data)
         except llm.LLMError as exc:
