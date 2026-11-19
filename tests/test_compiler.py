@@ -231,3 +231,30 @@ def test_mode_off_and_policy_validation(users):
         _proven(conn, a.tenant, "Đếm lỗi bằng aggregation trên toàn bộ bản ghi")
     a.post("/api/compile")
     assert _core(a) == "" and "tắt tự publish" in _pending(a)[0]["summary"]["rules_added"][0]["why_review"]
+
+
+def test_entity_pages_group_kinds_incidents_and_related(users):
+    from kagent import compiler, db, knowledge, sources
+    t = users["admin"].tenant
+    with db.session() as conn:
+        a = knowledge.add(conn, t, kind="fact", title="Index log", content="log ở k8s-staging-web-*", entities=["web", "kibana"], source_eps=["e1"],
+                          source_trust="user", status="active")
+        b = knowledge.add(conn, t, kind="lesson", title="0 hit", content="0 hit không chứng minh không lỗi", entities=["web"], source_eps=["e2"],
+                          source_trust="user", status="active")
+        c = knowledge.add(conn, t, kind="procedure", title="Rollout undo", content="undo rồi kiểm tra", entities=["deploy-web"], source_eps=["e3"],
+                          source_trust="user", status="active")
+        knowledge.add_edge(conn, t, min(b["id"], c["id"]), max(b["id"], c["id"]), "related")
+        now = db.iso()
+        conn.execute("INSERT INTO incident(id,tenant_id,env,title,status,created_at,updated_at,last_alert_at,resolved_at,cause,cause_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                     ("inc1", t, "staging", "Web 500", "resolved", now, now, now, now, "Thiếu Service. Chi tiết khác", now))
+        doc = sources.add(conn, t, title="Sự cố: Web 500", content="x", kind="incident", trust="verified_tool", ref=f"inc1@{now}")
+        knowledge.update(conn, t, b["id"], {"source_eps": ["e2", f"doc:{doc['id']}#1"]}, "UPDATE", "test")
+        knowledge.add(conn, t, kind="lesson", title="Ứng viên", content="chưa duyệt", entities=["web"], source_eps=["e4"], source_trust="user")
+        files, _ = compiler.generate(conn, t)
+    page = files[compiler.find_page(files, "web")]
+    assert page.startswith("# web\n\n2 tri thức") and "## Sự thật" in page and "## Cạm bẫy" in page and "Ứng viên" not in page
+    assert "## Sự cố đã gặp" in page and "Web 500: Thiếu Service" in page
+    assert "thực thể kibana (1 tri thức chung)" in page  # kibana chỉ có 1 KU nhưng là fact nên vẫn có trang
+    assert "Rollout undo" in page.split("## Liên quan")[1]
+    assert compiler.find_page(files, "kibana") and "- web (2)" in files["entities/index.md"]
+    assert compiler.find_page(files, "deploy-web") is None  # một KU, không phải fact: không có trang riêng

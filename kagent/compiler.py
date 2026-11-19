@@ -127,13 +127,7 @@ def generate(conn, tenant_id: str) -> tuple[dict[str, str], list[dict]]:
                 body += [f"## {HEADINGS[kind]}", *[_line(k) for k in group], ""]
         files[f"playbooks/{slug(domain)}.md"] = "\n".join(body).rstrip() + "\n"
 
-    by_entity: dict[str, list[dict]] = {}
-    for ku in kus:
-        if ku["kind"] == "fact":
-            for entity in ku["entities"] or ["chung"]:
-                by_entity.setdefault(entity, []).append(ku)
-    for entity in sorted(by_entity):
-        files[f"entities/{slug(entity)}.md"] = f"# {entity}\n\n" + "\n".join(_line(k) for k in by_entity[entity]) + "\n"
+    files.update(entity_pages(conn, tenant_id, kus))
 
     skills = []
     for domain in sorted({k["domain"] for k in kus if k["kind"] == "procedure"}):
@@ -151,6 +145,105 @@ def generate(conn, tenant_id: str) -> tuple[dict[str, str], list[dict]]:
             f"metadata:\n  source_kus: [{kus_list}]\n  success_rate_30d: {rate}\n  owner: {tenant_id}\n---\n\n# {name}\n\n{steps}\n")
         skills.append({"name": name, "domain": domain, "tools": tools, "rate": rate})
     return files, skills
+
+
+PAGE_KINDS = ("fact", "procedure", "lesson", "insight", "rule")
+PAGE_RELATED = 8
+
+
+def page_path(entity: str) -> str:
+    return f"entities/{slug(entity)}.md"
+
+
+def find_page(files: dict[str, str], entity: str) -> str | None:
+    """Tìm trang theo tiêu đề "# <thực thể>" thay vì đoán đường dẫn, vì slug trùng thì trang sau có hậu tố."""
+    want = entity.strip().lower()
+    for path, text in files.items():
+        if path.startswith("entities/") and path != "entities/index.md" and text.split("\n", 1)[0][2:].strip().lower() == want:
+            return path
+    return None
+
+
+def _page_line(ku: dict) -> str:
+    line = f"- [ku:{ku['id'][:8]}] **{ku['title']}**: {ku['content']}"
+    return line + (f" _(áp dụng: {ku['applies_when']})_" if ku.get("applies_when") else "")
+
+
+def _incidents_by_ku(conn, tenant_id: str, kus: list[dict]) -> dict[str, list[dict]]:
+    """KU tách từ bản ghi sự cố (sources.py) → sự cố gốc, để trang thực thể ghi được "đã gặp ở sự cố nào"."""
+    docs: dict[str, list[str]] = {}
+    for ku in kus:
+        for e in ku["source_eps"]:
+            if e.startswith("doc:"):
+                docs.setdefault(e[4:].split("#", 1)[0], []).append(ku["id"])
+    if not docs:
+        return {}
+    marks = ",".join("?" * len(docs))
+    rs = conn.execute(f"SELECT d.id, d.ref, i.title, coalesce(i.resolved_at, i.updated_at) at, coalesce(i.cause, i.root_cause) cause FROM source_doc d "
+                      f"JOIN incident i ON i.id = substr(d.ref, 1, instr(d.ref, '@') - 1) WHERE d.tenant_id=? AND d.kind='incident' AND d.id IN ({marks})",
+                      (tenant_id, *docs)).fetchall()
+    out: dict[str, list[dict]] = {}
+    for r in rs:
+        for ku_id in docs[r["id"]]:
+            out.setdefault(ku_id, []).append({"id": r["ref"].split("@", 1)[0], "title": r["title"], "at": r["at"], "cause": r["cause"]})
+    return out
+
+
+def entity_pages(conn, tenant_id: str, kus: list[dict]) -> dict[str, str]:
+    """Mỗi thực thể có từ 2 KU (hoặc có một sự thật) là một trang: KU theo loại, sự cố đã gặp, thực thể và KU liên quan.
+
+    Trang chỉ dựng lại từ KU đang hiệu lực, không do LLM viết, nên đổi nội dung chỉ qua KU (có duyệt, có lịch sử).
+    """
+    by_entity: dict[str, list[dict]] = {}
+    for ku in kus:
+        for entity in ku["entities"]:
+            by_entity.setdefault(entity, []).append(ku)
+    pages = {e: g for e, g in by_entity.items() if len(g) >= 2 or any(k["kind"] == "fact" for k in g)}
+    by_id = {k["id"]: k for k in kus}
+    incidents = _incidents_by_ku(conn, tenant_id, kus)
+    ids = list(by_id)
+    edges = conn.execute(f"SELECT src, dst FROM ku_edge WHERE tenant_id=? AND rel='related' AND src IN ({','.join('?' * len(ids))})",
+                         (tenant_id, *ids)).fetchall() if ids else []
+    neighbours: dict[str, set[str]] = {}
+    for e in edges:
+        neighbours.setdefault(e["src"], set()).add(e["dst"])
+        neighbours.setdefault(e["dst"], set()).add(e["src"])
+    files: dict[str, str] = {}
+    for entity, group in sorted(pages.items()):
+        mine = {k["id"] for k in group}
+        body = [f"# {entity}", "", f"{len(group)} tri thức đang hiệu lực.", ""]
+        for kind in PAGE_KINDS:
+            part = [k for k in group if k["kind"] == kind]
+            if part:
+                body += [f"## {HEADINGS[kind]}", *[_page_line(k) for k in part], ""]
+        seen = {}
+        for k in group:
+            for inc in incidents.get(k["id"], []):
+                seen[inc["id"]] = inc
+        if seen:
+            body += ["## Sự cố đã gặp", *[f"- {i['at'][:10]} {i['title']}: {(i['cause'] or '').split('. ')[0][:200]}"
+                                          for i in sorted(seen.values(), key=lambda i: i["at"], reverse=True)], ""]
+        together: dict[str, int] = {}
+        for k in group:
+            for other in k["entities"]:
+                if other != entity and other in pages:
+                    together[other] = together.get(other, 0) + 1
+        close = sorted(together.items(), key=lambda x: (-x[1], x[0]))[:PAGE_RELATED]
+        linked = sorted({n for k in mine for n in neighbours.get(k, ()) if n not in mine and n in by_id}, key=lambda i: _rank(by_id[i]))[:PAGE_RELATED]
+        if close or linked:
+            body.append("## Liên quan")
+            body += [f"- thực thể {other} ({n} tri thức chung)" for other, n in close]
+            body += [f"- [ku:{i[:8]}] {by_id[i]['title']}" for i in linked]
+            body.append("")
+        path, n = page_path(entity), 2
+        while path in files or path == "entities/index.md":  # slug trùng ("a b" và "a-b") hoặc thực thể tên "index"
+            path, n = f"entities/{slug(entity)}-{n}.md", n + 1
+        files[path] = "\n".join(body).rstrip() + "\n"
+    if pages:
+        index = ["# Thực thể", "", "Mỗi dòng là một trang; đọc bằng công cụ read_knowledge_page.", ""]
+        index += [f"- {e} ({len(g)})" for e, g in sorted(pages.items(), key=lambda x: (-len(x[1]), x[0]))]
+        files["entities/index.md"] = "\n".join(index) + "\n"
+    return files
 
 
 def golden_score(conn, tenant_id: str, files: dict[str, str]) -> float | None:
