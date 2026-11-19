@@ -29,6 +29,7 @@ Thu hẹp thêm bằng `-k` hoặc `--lf`.
 | `conversation.py` | `test_conversation.py test_chat.py test_approval_flow.py` |
 | `llm.py` | `test_llm.py test_llm_openai.py test_llm_key.py test_llm_models.py test_token_metrics.py` |
 | `knowledge.py`, `retrieval.py`, `learning.py` | `test_knowledge.py test_knowledge_graph.py test_ku_consolidate.py` |
+| `lint.py` | `test_lint.py` |
 | `learned.py` | `test_learned_personal.py` |
 | `compiler.py` | `test_compiler.py` |
 | `entities.py` | `test_entities.py` |

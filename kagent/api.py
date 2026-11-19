@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import agent as agent_mod
-from . import automode, compiler, connections, db, entities, gateway, incidents, knowledge, learned, learning, llm, net, proxy, tools, undo, vault
+from . import automode, compiler, connections, db, entities, gateway, incidents, knowledge, learned, learning, lint, llm, net, proxy, tools, undo, vault
 from . import live
 from .connectors import k8s_rbac
 from .connectors.base import ConnectorError
@@ -913,6 +913,18 @@ def entity_merge(body: EntityMerge, t: Tenant = Depends(current_tenant), conn=De
         return entities.merge(conn, t.tenant_id, body.sources, body.target, t.principal.username)
     except ValueError as e:
         raise HTTPException(400, str(e))
+
+
+@app.get("/api/knowledge/lint")
+def knowledge_lint(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    t.require_admin()
+    return lint.latest(conn, t.tenant_id)
+
+
+@app.post("/api/knowledge/lint")
+def knowledge_lint_run(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    t.require_admin()
+    return lint.run(conn, t.tenant_id, t.principal.username)
 
 
 @app.post("/api/ku")

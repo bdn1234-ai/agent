@@ -1,10 +1,10 @@
-"""Vòng nền: hết hạn phê duyệt, học khi đủ episode hoặc có thất bại, biên dịch sau khi học."""
+"""Vòng nền: hết hạn phê duyệt, kiểm tra kho tri thức mỗi ngày, học khi đủ episode hoặc có thất bại, biên dịch sau khi học."""
 from __future__ import annotations
 
 import logging
 import threading
 
-from . import compiler, db, gateway, incidents, learning, results, undo
+from . import compiler, db, gateway, incidents, learning, lint, results, undo
 from .config import settings
 
 log = logging.getLogger("kagent.scheduler")
@@ -15,6 +15,8 @@ def tick() -> None:
         gateway.expire_approvals(conn)
         results.purge(conn)
         for t in conn.execute("SELECT id FROM tenant").fetchall():
+            if lint.due(conn, t["id"]):
+                lint.run(conn, t["id"])
             if learning.should_learn(conn, t["id"]):
                 result = learning.run_learning(conn, t["id"])
                 log.info("tenant %s học: %s", t["id"], {k: v for k, v in result.items() if k != "details"})

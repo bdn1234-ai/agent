@@ -32,6 +32,8 @@ class Settings:
         # Embedding băm chỉ phản ánh trùng từ vựng nên ngưỡng thấp hơn mức 0,85 của tài liệu kiến trúc.
         self.near_threshold = 0.55
         self.confirm_threshold = 0.9
+        # Ứng viên chưa từng được duyệt sau 4 ngày tuổi (số liệu 11-19/11), nên quá 7 ngày coi như bị bỏ quên.
+        self.lint_stale_days = int(env("KAGENT_LINT_STALE_DAYS", "7"))
         self.budget_core = 1500
         self.budget_playbook = 3000
         self.budget_ku = 2000

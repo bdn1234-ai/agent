@@ -569,6 +569,40 @@ VIEWS.episodes = async (main) => {
     h("tbody", {}, list.map((e) => h("tr", { class: "click", onclick: open(e.id) }, h("td", {}, fmtTime(e.started_at)), h("td", {}, e.input.task), h("td", {}, e.task_type), h("td", {}, e.env), h("td", {}, badge(e.outcome)), h("td", {}, e.user), h("td", {}, e.processed_at ? "rồi" : "chưa")))))), detail);
 };
 
+// Kết quả kiểm tra định kỳ (lint.py): chỉ việc loại ứng viên quá hạn đã tự làm, còn lại là gợi ý để admin bấm.
+function lintCard(report, reload) {
+  const box = h("div", { class: "card" });
+  const run = guard(async () => { render(await api("POST", "/api/knowledge/lint")); toast("Đã kiểm tra kho tri thức"); await reload(); });
+  const mergeEntity = (m, li) => guard(async () => {
+    const r = await api("POST", "/api/knowledge/entities/merge", { sources: m.sources, target: m.target });
+    li.replaceChildren(h("span", { class: "small" }, `Đã gộp ${r.merged.join(", ")} → ${r.target} (${r.kus} KU)`));
+  });
+  const list = (items, line) => h("ul", { class: "small" }, items.map(line));
+  function render(r) {
+    if (!r) {
+      box.replaceChildren(h("div", { class: "row spread" }, h("b", {}, "Kiểm tra kho tri thức"), h("button", { type: "button", class: "ghost", onclick: run }, "Kiểm tra ngay")),
+        h("div", { class: "small muted" }, "Chưa chạy lần nào. Vòng nền tự chạy mỗi ngày một lần."));
+      return;
+    }
+    const b = r.backlog;
+    box.replaceChildren(
+      h("div", { class: "row spread" }, h("b", {}, "Kiểm tra kho tri thức"), h("span", { class: "small muted" }, `lần gần nhất ${fmtTime(r.at)}`),
+        h("button", { type: "button", class: "ghost", onclick: run }, "Kiểm tra ngay")),
+      h("div", { class: "small" }, `${b.candidates} ứng viên chờ duyệt${b.oldest ? `, cũ nhất từ ${fmtTime(b.oldest)}` : ""}; khoảng ${b.new_per_day} KU mới mỗi ngày.`),
+      r.expired.length > 0 && h("details", {}, h("summary", { class: "small" }, `Đã loại ${r.expired.length} ứng viên quá ${r.stale_days} ngày chưa được duyệt hay xác nhận (hoàn tác được trong Lịch sử của từng KU)`),
+        list(r.expired, (x) => h("li", {}, x.title))),
+      r.entity_merges.length > 0 && h("details", { open: true }, h("summary", { class: "small" }, `${r.entity_merges.length} nhóm tên thực thể chỉ khác dấu nối hoặc số nhiều`),
+        list(r.entity_merges, (m) => { const li = h("li", {}, `${m.sources.join(", ")} → `, h("b", {}, m.target), ` (${m.kus} KU) `); li.append(h("button", { type: "button", class: "ghost small-btn", onclick: mergeEntity(m, li) }, "Gộp")); return li; })),
+      r.contradictions.length > 0 && h("details", { open: true }, h("summary", { class: "small" }, `${r.contradictions.length} ứng viên mâu thuẫn với KU đang dùng (cần người chọn bên đúng)`),
+        list(r.contradictions, (x) => h("li", {}, `"${x.new_title}" ↔ "${x.old_title}"`))),
+      r.unused.length > 0 && h("details", {}, h("summary", { class: "small" }, `${r.unused.length} KU đang dùng nhưng ${r.unused_days} ngày chưa được nạp vào lượt nào`),
+        list(r.unused, (x) => h("li", {}, `${x.title} (${x.kind}, lần cuối ${fmtTime(x.last_used)})`))),
+      !r.expired.length && !r.entity_merges.length && !r.contradictions.length && !r.unused.length && h("div", { class: "small muted" }, "Không có gì cần xử lý."));
+  }
+  render(report);
+  return box;
+}
+
 async function knowledgeUnitsView(main) {
   const statusSel = persist(h("select", { "aria-label": "Trạng thái", onchange: () => load() }, [["candidate", "Ứng viên"], ["active", "Hiệu lực"], ["deprecated", "Hết hiệu lực"], ["rejected", "Bị loại"], ["", "Tất cả"]].map(([v, l]) => h("option", { value: v }, l))), "ku:status");
   const kindSel = persist(h("select", { "aria-label": "Loại", onchange: () => load() }, [["", "Mọi loại"], ...["rule", "fact", "procedure", "lesson", "insight"].map((k) => [k, k])].map(([v, l]) => h("option", { value: v }, l))), "ku:kind");
@@ -729,7 +763,8 @@ async function knowledgeUnitsView(main) {
     toast("Đã thêm ứng viên"); statusSel.value = "candidate"; store.set("ku:status", "candidate"); await load();
   });
   main.append(h("h2", {}, "Tri thức (L1)"), h("div", { class: "row" }, statusSel, kindSel, isAdmin() && h("button", { onclick: learn }, "Chạy học ngay")),
-    h("div", { class: "card row" }, kind, title, content, h("button", { class: "ghost", onclick: add }, "Thêm KU")), detail, bulkBar, consolidated, box);
+    h("div", { class: "card row" }, kind, title, content, h("button", { class: "ghost", onclick: add }, "Thêm KU")),
+    isAdmin() && lintCard(await api("GET", "/api/knowledge/lint"), load), detail, bulkBar, consolidated, box);
   await load();
   resume().catch((e) => toast(e.message, true));
 };
