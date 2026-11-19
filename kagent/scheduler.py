@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import threading
 
-from . import compiler, db, gateway, incidents, learning, lint, results, sources, undo
+from . import compiler, db, dedup, gateway, incidents, learning, lint, results, sources, undo
 from .config import settings
 
 log = logging.getLogger("kagent.scheduler")
@@ -17,6 +17,7 @@ def tick() -> None:
         for t in conn.execute("SELECT id FROM tenant").fetchall():
             if lint.due(conn, t["id"]):
                 lint.run(conn, t["id"])
+                dedup.start(t["id"])  # luồng riêng: gọi LLM theo từng cụm, không làm trễ vòng nền
             sources.tick(conn, t["id"])
             if learning.should_learn(conn, t["id"]):
                 result = learning.run_learning(conn, t["id"])

@@ -101,9 +101,19 @@ def run(conn, tenant_id: str, actor: str = "lint") -> dict:
         "contradictions": contradictions(conn, tenant_id),
         "backlog": backlog(conn, tenant_id),
     }
+    previous = latest(conn, tenant_id) or {}
+    if "dedup" in previous:  # tìm KU trùng chạy riêng (gọi LLM), kết quả gần nhất giữ qua các lần kiểm tra nhanh
+        report["dedup"] = previous["dedup"]
     conn.execute("INSERT INTO ku_lint(tenant_id, report, at) VALUES (?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET report=excluded.report, at=excluded.at",
                  (tenant_id, json.dumps(report, ensure_ascii=False), report["at"]))
     return report
+
+
+def attach(conn, tenant_id: str, key: str, value) -> None:
+    report = latest(conn, tenant_id) or {"at": db.iso()}
+    report[key] = value
+    conn.execute("INSERT INTO ku_lint(tenant_id, report, at) VALUES (?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET report=excluded.report",
+                 (tenant_id, json.dumps(report, ensure_ascii=False), report["at"]))
 
 
 def latest(conn, tenant_id: str) -> dict | None:

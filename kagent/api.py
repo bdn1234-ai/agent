@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import agent as agent_mod
-from . import automode, compiler, connections, db, entities, gateway, incidents, knowledge, learned, learning, lint, llm, net, proxy, sources, tools, undo, vault
+from . import automode, compiler, connections, db, dedup, entities, gateway, incidents, knowledge, learned, learning, lint, llm, net, proxy, sources, tools, undo, vault
 from . import live
 from .connectors import k8s_rbac
 from .connectors.base import ConnectorError
@@ -959,6 +959,38 @@ def knowledge_lint(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
 def knowledge_lint_run(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
     t.require_admin()
     return lint.run(conn, t.tenant_id, t.principal.username)
+
+
+@app.post("/api/knowledge/dedup")
+def knowledge_dedup(t: Tenant = Depends(current_tenant)):
+    """Tìm KU trùng theo cụm chủ đề ngay (chạy nền, gọi LLM); kết quả vào báo cáo kiểm tra và danh sách đề xuất gộp."""
+    t.require_admin()
+    return {"started": dedup.start(t.tenant_id), "running": True}
+
+
+@app.get("/api/knowledge/merge-proposals")
+def merge_proposals(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    t.require_admin()
+    return {"running": dedup.running(t.tenant_id), "proposals": dedup.proposals(conn, t.tenant_id)}
+
+
+class MergeDecision(BaseModel):
+    approve: bool
+    title: str | None = Field(default=None, max_length=200)
+    content: str | None = Field(default=None, max_length=2000)
+    applies_when: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/api/knowledge/merge-proposals/{proposal_id}/decide")
+def merge_proposal_decide(proposal_id: str, body: MergeDecision, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    t.require_admin()
+    edits = {k: v for k, v in (("title", body.title), ("content", body.content), ("applies_when", body.applies_when)) if v is not None}
+    try:
+        return dedup.decide(conn, t.tenant_id, proposal_id, body.approve, t.principal.username, edits)
+    except KeyError:
+        raise HTTPException(404, "không tìm thấy đề xuất")
+    except ValueError as e:
+        raise HTTPException(409, str(e))
 
 
 class NewSource(BaseModel):

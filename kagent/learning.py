@@ -7,7 +7,7 @@ import threading
 from . import db, entities, knowledge, learned, llm
 from .config import settings
 from .knowledge import scrub_data
-from .retrieval import near, tokenize
+from .retrieval import cosine, embed, near, tokenize
 
 _lock = threading.Lock()
 
@@ -87,6 +87,21 @@ def _update_counters(conn, tenant_id: str, episode: dict, blamed: set[str], untr
             knowledge.update(conn, tenant_id, ku_id, {"status": "deprecated", "valid_to": db.iso()}, "DEPRECATE", "curator", "số lần có hại vượt số lần hữu ích")
 
 
+PEERS_FOR_CURATOR = 4
+
+
+def topic_neighbours(conn, tenant_id: str, item: dict, scope: str, skip: set[str]) -> list[dict]:
+    """KU cùng loại chung thực thể hiếm với mục mới: embedding băm chỉ bắt trùng chữ, nên cùng ý khác chữ (KU từ chat và từ
+    bản ghi sự cố về cùng một service) không lọt vào near(). via="entity" để Curator heuristic không coi đây là gần nghĩa."""
+    names = entities.normalize(conn, tenant_id, item.get("entities") or [])
+    vec = embed(f"{item['title']} {item['content']} {item.get('applies_when') or ''}")
+    out = []
+    for score, ku_id in knowledge.topic_peers(conn, tenant_id, names, vec, scope, exclude=skip, kind=item["kind"])[:PEERS_FOR_CURATOR]:
+        ku = knowledge.get(conn, tenant_id, ku_id)
+        out.append({k: v for k, v in ku.items() if k != "embedding"} | {"similarity": round(cosine(vec, ku["embedding"]), 4), "via": "entity"})
+    return out
+
+
 def curate_item(conn, tenant_id: str, provider, item: dict, episode: dict, trust: str) -> str:
     op, ku_id = _curate(conn, tenant_id, provider, item, episode, trust)
     if ku_id and op != "NOOP":
@@ -97,6 +112,7 @@ def curate_item(conn, tenant_id: str, provider, item: dict, episode: dict, trust
 def _curate(conn, tenant_id: str, provider, item: dict, episode: dict, trust: str) -> tuple[str, str | None]:
     scope = f"user:{episode['user_id']}" if item.get("scope") == "user" else episode["scope"]
     candidates = near(conn, tenant_id, f"{item['title']} {item['content']}", item["kind"], settings.near_threshold, scope=scope)
+    candidates += topic_neighbours(conn, tenant_id, item, scope, {c["id"] for c in candidates})
     decision = provider.curate(item, candidates)
     op, target = decision["op"], decision.get("target")
     target_ku = knowledge.get(conn, tenant_id, target) if target else None

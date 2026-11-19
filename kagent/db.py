@@ -156,6 +156,15 @@ CREATE TABLE IF NOT EXISTS source_doc (
 CREATE INDEX IF NOT EXISTS ix_source_doc ON source_doc(tenant_id, status, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_source_doc_ref ON source_doc(tenant_id, kind, ref) WHERE ref IS NOT NULL;
 
+-- Đề xuất gộp KU đang dùng (dedup.py), chờ admin duyệt. ids là JSON đã sắp xếp, để nhận ra nhóm admin đã bỏ qua.
+CREATE TABLE IF NOT EXISTS ku_merge_proposal (
+  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, ids TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL,
+  applies_when TEXT, reason TEXT, entity TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL,
+  decided_by TEXT, decided_at TEXT, merged_into TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_ku_merge_proposal ON ku_merge_proposal(tenant_id, status);
+CREATE TABLE IF NOT EXISTS ku_dedup_seen (tenant_id TEXT NOT NULL, fingerprint TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY (tenant_id, fingerprint));
+
 CREATE TABLE IF NOT EXISTS ku_lint (tenant_id TEXT PRIMARY KEY, report TEXT NOT NULL, at TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS tool_result (

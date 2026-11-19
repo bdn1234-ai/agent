@@ -605,9 +605,49 @@ function lintCard(report, reload) {
         list(r.contradictions, (x) => h("li", {}, `"${x.new_title}" ↔ "${x.old_title}"`))),
       r.unused.length > 0 && h("details", {}, h("summary", { class: "small" }, `${r.unused.length} KU đang dùng nhưng ${r.unused_days} ngày chưa được nạp vào lượt nào`),
         list(r.unused, (x) => h("li", {}, `${x.title} (${x.kind}, lần cuối ${fmtTime(x.last_used)})`))),
+      r.dedup && h("div", { class: "small" }, `Tìm KU trùng lúc ${fmtTime(r.dedup.at)}: xét ${r.dedup.clusters} cụm (bỏ qua ${r.dedup.skipped} cụm không đổi), ` +
+        `tự gộp ${r.dedup.confirmed} ứng viên vào KU nói cùng điều, đề xuất ${r.dedup.proposed} bản gộp` +
+        (r.dedup.remaining ? `; còn ${r.dedup.remaining} cụm cho lần sau` : "") + (r.dedup.errors.length ? `; ${r.dedup.errors.length} cụm lỗi: ${r.dedup.errors[0]}` : "") + "."),
       !r.expired.length && !r.entity_merges.length && !r.contradictions.length && !r.unused.length && h("div", { class: "small muted" }, "Không có gì cần xử lý."));
   }
   render(report);
+  return box;
+}
+
+// Đề xuất gộp của dedup.py: gộp KU đang dùng đổi điều agent sẽ thấy nên cần admin; bản gốc hết hiệu lực, vẫn hoàn tác được.
+function mergeProposalsCard(reload) {
+  const box = h("div");
+  const TRUST = { user: "người dùng nói", verified_tool: "kết quả công cụ", internal_doc: "tài liệu", external_untrusted: "nội dung ngoài" };
+  const findDups = guard(async () => {
+    const r = await api("POST", "/api/knowledge/dedup");
+    toast(r.started ? "Đang tìm KU trùng theo từng trang thực thể (gọi LLM, có thể mất vài phút)" : "Đang tìm rồi, chờ lượt hiện tại xong");
+    poll();
+  });
+  const card = (p) => {
+    const t = h("input", { class: "wide", value: p.title, "aria-label": "Tiêu đề bản gộp" });
+    const c = h("textarea", { rows: 3, value: p.content, "aria-label": "Nội dung bản gộp" });
+    const a = h("input", { class: "wide", value: p.applies_when || "", placeholder: "Áp dụng khi", "aria-label": "Điều kiện áp dụng" });
+    const el = h("div", { class: "card" });
+    const decide = (approve) => guard(async () => {
+      await api("POST", `/api/knowledge/merge-proposals/${p.id}/decide`, approve ? { approve, title: t.value, content: c.value, applies_when: a.value } : { approve });
+      el.replaceChildren(h("div", { class: "small" }, approve ? `Đã gộp ${p.members.length} KU thành "${t.value}".` : "Đã bỏ qua; nhóm này sẽ không được đề xuất lại."));
+      await reload();
+    });
+    el.append(h("div", { class: "row spread" }, h("b", {}, `Gộp ${p.members.length} KU về ${p.entity || "cùng chủ đề"}`), h("span", { class: "badge info" }, p.kind)),
+      h("ul", { class: "small" }, p.members.map((m) => h("li", {}, badge(m.status), " ", h("b", {}, m.title), `: ${m.content} `,
+        h("span", { class: "muted" }, `(${TRUST[m.source_trust] || m.source_trust} · ✓${m.helpful_cnt} ✗${m.harmful_cnt})`)))),
+      p.reason && h("div", { class: "small muted" }, p.reason), h("div", { class: "small" }, "Bản gộp (sửa được):"), t, c, a,
+      h("div", { class: "row" }, h("button", { type: "button", onclick: decide(true) }, "Gộp"), h("button", { type: "button", class: "ghost", onclick: decide(false) }, "Bỏ qua")));
+    return el;
+  };
+  async function poll() {
+    const r = await api("GET", "/api/knowledge/merge-proposals");
+    box.replaceChildren(h("div", { class: "row spread" }, h("h3", {}, `Đề xuất gộp KU (${r.proposals.length})`),
+        r.running ? busy("đang tìm KU trùng…") : h("button", { type: "button", class: "ghost", onclick: findDups, title: "Xét từng trang thực thể; cụm không đổi từ lần trước được bỏ qua" }, "Tìm KU trùng ngay")),
+      ...(r.proposals.length ? r.proposals.map(card) : [h("div", { class: "card muted small" }, "Không có đề xuất gộp. Vòng nền tìm mỗi ngày; ứng viên nói đúng điều một KU đã có được tự gộp, không cần duyệt.")]));
+    if (r.running) setTimeout(() => { if (document.contains(box)) poll().then(reload).catch(() => {}); }, 4000);
+  }
+  poll().catch((e) => toast(e.message, true));
   return box;
 }
 
@@ -772,7 +812,7 @@ async function knowledgeUnitsView(main) {
   });
   main.append(h("h2", {}, "Tri thức (L1)"), h("div", { class: "row" }, statusSel, kindSel, isAdmin() && h("button", { onclick: learn }, "Chạy học ngay")),
     h("div", { class: "card row" }, kind, title, content, h("button", { class: "ghost", onclick: add }, "Thêm KU")),
-    isAdmin() && lintCard(await api("GET", "/api/knowledge/lint"), load), detail, bulkBar, consolidated, box);
+    isAdmin() && lintCard(await api("GET", "/api/knowledge/lint"), load), isAdmin() && mergeProposalsCard(load), detail, bulkBar, consolidated, box);
   await load();
   resume().catch((e) => toast(e.message, true));
 };
@@ -1615,7 +1655,7 @@ async function knowledgeSourcesView(main) {
 VIEWS.knowledge = (main) => subTabs(main, [["graph", "Đồ thị (L3)", knowledgeGraphView], ["units", "Tri thức (L1)", knowledgeUnitsView],
   ["compiled", "Runbook (L2)", compiledView], ["sources", "Nguồn", knowledgeSourcesView]]);
 
-const PURPOSE = { agent: "Agent trả lời", route: "Router", check_plan: "Kiểm tra độc lập", reflect: "Reflector", curate: "Curator", extract: "Đọc tài liệu", consolidate: "Tổng hợp KU", judge: "Chấm kết quả", other: "Khác" };
+const PURPOSE = { agent: "Agent trả lời", route: "Router", check_plan: "Kiểm tra độc lập", reflect: "Reflector", curate: "Curator", extract: "Đọc tài liệu", consolidate: "Tổng hợp KU", dedup: "Tìm KU trùng", judge: "Chấm kết quả", other: "Khác" };
 const num = (v) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("vi-VN"));
 
 const SVG_NS = "http://www.w3.org/2000/svg";

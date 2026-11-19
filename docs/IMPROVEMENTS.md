@@ -322,3 +322,19 @@ tri thức chỉ đến từ episode.
   `external_untrusted`; ký ức cá nhân có hiệu lực ngay.
 - **Chưa làm:** đoạn tóm tắt do LLM viết ở đầu trang thực thể. Còn mở: khoảng 54 ứng viên mới mỗi ngày, lint chỉ chặn tồn đọng
   ở mức khoảng một tuần; muốn giảm hẳn phải giảm lượng Reflector sinh ra.
+
+## Đợt 38 — 2026-11-19: gộp KU trùng, kể cả KU đang dùng
+
+Trang thực thể không do LLM viết lại, nên trùng lặp phải gộp ở mức KU. Trước đợt này có hai lỗ: Curator chỉ so với `near()`
+(embedding băm, bỏ sót cùng ý khác chữ: sự cố cmp-document cho 3 ADD dù đã có KU về nó), và "Tổng hợp trùng lặp" chỉ gộp ứng viên.
+- **Curator thấy KU cùng chủ đề:** ngoài `near()`, nhận thêm tối đa 4 KU cùng loại chung thực thể hiếm (`topic_peers`, cùng điểm
+  IDF với cạnh `related`), đánh dấu `via=entity` để Curator heuristic không coi là gần nghĩa.
+- **Tìm trùng theo cụm (`dedup.py`):** cụm = KU cùng loại trên một trang thực thể, thực thể hiếm xét trước, mỗi KU một cụm,
+  cụm không đổi thì không gọi lại LLM. LLM chia nhóm "cùng một điều":
+  - ứng viên trùng một KU khác: tự loại (op `CONFIRM`), nguồn của nó thành xác nhận cho KU giữ lại, trừ khi nguồn kém tin hơn;
+  - cần viết bản gộp, hoặc từ 2 KU đang dùng: thành đề xuất ở màn Tri thức (L1), admin sửa được bản gộp, bấm Gộp hoặc Bỏ qua.
+    Nhóm đã bỏ qua không được đề xuất lại.
+- **`merge` nhận KU đang dùng:** bản gộp có hiệu lực ngay, cộng dồn bộ đếm hữu ích/có hại; bản gốc đang dùng chuyển `deprecated`
+  kèm `superseded_by`.
+- **Chạy:** sau lần kiểm tra hằng ngày, trong luồng nền; nút "Tìm KU trùng ngay". Tối đa 60 cụm mỗi lần.
+  Dữ liệu thật: 134 cụm, khoảng 700 token input mỗi cụm; thử 4 cụm ra 2 đề xuất đúng, golden giữ 0,9.

@@ -142,36 +142,42 @@ def _shares_scope(a: str, b: str) -> bool:
     return a == b or (a in shared and b in shared) or (a.startswith(("user:", "project:")) and b in shared) or (b.startswith(("user:", "project:")) and a in shared)
 
 
-def link_related(conn, tenant_id: str, ku_id: str) -> int:
-    """Nối KU với tối đa 3 KU cùng chủ đề: điểm = tổng IDF của thực thể chung + 2×cosine.
+def topic_peers(conn, tenant_id: str, entities: list[str], vec: list[float], scope: str, *, exclude: set[str] = frozenset(),
+                kind: str | None = None, minimum: float = RELATED_MIN) -> list[tuple[float, str]]:
+    """KU cùng chủ đề, điểm cao trước: điểm = tổng IDF của thực thể chung + 2×cosine.
 
-    IDF để thực thể có mặt khắp nơi (tên cụm, môi trường) gần như không tính. Cạnh lưu src<dst vì truy xuất đi cả hai chiều.
-    Chỉ nối trong phạm vi nhìn thấy nhau, để ký ức cá nhân không kéo KU của người khác vào lượt.
+    IDF để thực thể có mặt khắp nơi (tên cụm, môi trường) gần như không tính. Chỉ xét KU nhìn thấy nhau trong phạm vi,
+    để ký ức cá nhân không kéo KU của người khác vào.
     """
-    ku = get(conn, tenant_id, ku_id)
-    if ku is None or not ku["entities"] or ku["status"] not in ("active", "candidate"):
-        return 0
-    rs = conn.execute("SELECT id, scope, entities, embedding FROM knowledge_unit WHERE tenant_id=? AND status IN ('active','candidate')", (tenant_id,)).fetchall()
+    mine = set(entities)
+    if not mine:
+        return []
+    rs = conn.execute("SELECT id, kind, scope, entities, embedding FROM knowledge_unit WHERE tenant_id=? AND status IN ('active','candidate')", (tenant_id,)).fetchall()
     df: dict[str, int] = {}
     pool = []
     for r in rs:
         ents = set(json.loads(r["entities"]))
         for e in ents:
             df[e] = df.get(e, 0) + 1
-        if r["id"] != ku_id and _shares_scope(ku["scope"], r["scope"]):
+        if r["id"] not in exclude and _shares_scope(scope, r["scope"]) and (kind is None or r["kind"] == kind) and mine & ents:
             pool.append((r["id"], ents, r["embedding"]))
-    linked = {x for e in conn.execute("SELECT src, dst FROM ku_edge WHERE tenant_id=? AND (src=? OR dst=?)", (tenant_id, ku_id, ku_id)) for x in (e["src"], e["dst"])}
-    mine, n = set(ku["entities"]), len(rs)
+    n = len(rs) + 1  # +1: KU đang xét có thể chưa nằm trong kho (Curator gọi trước khi thêm)
     scored = []
-    for other, ents, vec in pool:
-        shared = mine & ents
-        if not shared or other in linked:
-            continue
-        score = sum(math.log(n / df[e]) for e in shared) + 2 * max(0.0, cosine(ku["embedding"], json.loads(vec)))
-        if score >= RELATED_MIN:
+    for other, ents, emb in pool:
+        score = sum(math.log(n / df[e]) for e in mine & ents) + 2 * max(0.0, cosine(vec, json.loads(emb)))
+        if score >= minimum:
             scored.append((score, other))
+    return sorted(scored, reverse=True)
+
+
+def link_related(conn, tenant_id: str, ku_id: str) -> int:
+    """Nối KU với tối đa 3 KU cùng chủ đề (topic_peers). Cạnh lưu src<dst vì truy xuất đi cả hai chiều."""
+    ku = get(conn, tenant_id, ku_id)
+    if ku is None or not ku["entities"] or ku["status"] not in ("active", "candidate"):
+        return 0
+    linked = {x for e in conn.execute("SELECT src, dst FROM ku_edge WHERE tenant_id=? AND (src=? OR dst=?)", (tenant_id, ku_id, ku_id)) for x in (e["src"], e["dst"])}
     room = max(0, RELATED_PER_KU - len(linked - {ku_id}))
-    best = sorted(scored, reverse=True)[:room]
+    best = topic_peers(conn, tenant_id, ku["entities"], ku["embedding"], ku["scope"], exclude=linked | {ku_id})[:room]
     for _, other in best:
         add_edge(conn, tenant_id, min(ku_id, other), max(ku_id, other), "related")
     return len(best)
@@ -224,16 +230,22 @@ KINDS = ("rule", "fact", "procedure", "lesson", "insight")
 TRUST_ORDER = ("external_untrusted", "internal_doc", "verified_tool", "user")
 
 
-def merge(conn, tenant_id: str, ids: list[str], merged: dict, actor: str, activate: bool = False) -> dict:
-    """Gộp các KU ứng viên trùng ý thành một KU mới; bản gốc chuyển rejected kèm superseded_by, vẫn truy vết được."""
+def merge(conn, tenant_id: str, ids: list[str], merged: dict, actor: str, activate: bool = False, allow_active: bool = False) -> dict:
+    """Gộp các KU trùng ý thành một KU mới; bản gốc vẫn truy vết được qua superseded_by.
+
+    allow_active (đề xuất gộp đã được người duyệt): gộp cả KU đang dùng; bản gốc đang dùng chuyển deprecated, bản gộp
+    có hiệu lực và mang tổng bộ đếm hữu ích/có hại của các bản gốc để không mất lịch sử sử dụng.
+    """
     ids = list(dict.fromkeys(ids))
     if len(ids) < 2:
         raise ValueError("cần ít nhất 2 KU để gộp")
     kus = [get(conn, tenant_id, i) for i in ids]
     if any(k is None for k in kus):
         raise KeyError("không tìm thấy KU")
-    if any(k["status"] != "candidate" for k in kus):
-        raise ValueError("chỉ gộp được KU đang là ứng viên")
+    allowed = ("candidate", "active") if allow_active else ("candidate",)
+    if any(k["status"] not in allowed for k in kus):
+        raise ValueError("chỉ gộp được KU đang là ứng viên" if not allow_active else "có KU đã hết hiệu lực hoặc bị loại")
+    activate = activate or any(k["status"] == "active" for k in kus)
     scopes = {k["scope"] for k in kus}
     if len(scopes) != 1:
         raise ValueError("chỉ gộp được KU cùng phạm vi")
@@ -249,8 +261,14 @@ def merge(conn, tenant_id: str, ids: list[str], merged: dict, actor: str, activa
                   entities=sorted({e for k in kus for e in k["entities"]}), source_eps=[e for k in kus for e in k["source_eps"]],
                   source_trust=min((k["source_trust"] for k in kus), key=TRUST_ORDER.index), scope=scopes.pop(),
                   domain=max(set(domains), key=domains.count), actor=actor, reason=f"gộp {len(kus)} KU trùng ý")
+        helpful, harmful = sum(k["helpful_cnt"] for k in kus), sum(k["harmful_cnt"] for k in kus)
+        if helpful or harmful:
+            new = update(conn, tenant_id, new["id"], {"helpful_cnt": helpful, "harmful_cnt": harmful,
+                                                      "confidence": recompute_confidence({**new, "helpful_cnt": helpful, "harmful_cnt": harmful})},
+                         "UPDATE", actor, "cộng bộ đếm của các bản gốc")
         for k in kus:
-            update(conn, tenant_id, k["id"], {"status": "rejected", "superseded_by": new["id"]}, "MERGE", actor, f"gộp vào {new['id']}")
+            gone = {"status": "deprecated", "valid_to": db.iso()} if k["status"] == "active" else {"status": "rejected"}
+            update(conn, tenant_id, k["id"], {**gone, "superseded_by": new["id"]}, "MERGE", actor, f"gộp vào {new['id']}")
             add_edge(conn, tenant_id, new["id"], k["id"], "refines")
         if activate:
             new = promote(conn, tenant_id, new["id"], actor, "người duyệt chấp nhận bản gộp")
