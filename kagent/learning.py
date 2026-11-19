@@ -137,7 +137,7 @@ def gate(conn, tenant_id: str) -> dict:
         elif tenant["auto_promote"] and ku["kind"] != "rule" and ku["source_trust"] != "external_untrusted":
             if ku["source_trust"] == "user":
                 reason = "nguồn là người dùng nói thẳng"
-            elif len(set(ku["source_eps"])) >= 2 and not contradiction:
+            elif knowledge.source_count(ku["source_eps"]) >= 2 and not contradiction:
                 reason = "được xác nhận bởi từ 2 episode độc lập"
         if reason:
             knowledge.promote(conn, tenant_id, ku["id"], "gate", reason)

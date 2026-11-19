@@ -12,7 +12,7 @@ import threading
 from datetime import timedelta
 from pathlib import Path
 
-from . import db
+from . import db, knowledge
 from .config import settings
 from .retrieval import tokenize
 
@@ -222,7 +222,7 @@ def _summary(conn, tenant_id: str, current: dict[str, str], proposed: dict[str, 
         r = conn.execute("SELECT * FROM knowledge_unit WHERE tenant_id=? AND id LIKE ?", (tenant_id, short + "%")).fetchone()
         ku = db.row(r, "entities", "source_eps") if r else None
         out = {"ku": ku["id"] if ku else short, "title": ku["title"] if ku else "", "content": content,
-               "source_trust": ku["source_trust"] if ku else None, "episodes": len(ku["source_eps"]) if ku else 0}
+               "source_trust": ku["source_trust"] if ku else None, "episodes": knowledge.source_count(ku["source_eps"]) if ku else 0}
         if pending and ku:
             out["why_review"] = rule_eligible(conn, tenant_id, ku, policy)[1]  # vì sao không tự publish
         return out
@@ -318,8 +318,8 @@ def rule_eligible(conn, tenant_id: str, ku: dict, policy: dict) -> tuple[bool, s
     promoted = _events(conn, tenant_id, ku["id"], "PROMOTE")
     since = promoted[-1]["at"] if promoted else ku["recorded_at"]
     missing = []
-    if len(set(ku["source_eps"])) < policy["min_episodes"]:
-        missing.append(f"{len(set(ku['source_eps']))}/{policy['min_episodes']} lượt xác nhận")
+    if knowledge.source_count(ku["source_eps"]) < policy["min_episodes"]:
+        missing.append(f"{knowledge.source_count(ku['source_eps'])}/{policy['min_episodes']} lượt xác nhận")
     if ku["helpful_cnt"] < policy["min_helpful"]:
         missing.append(f"{ku['helpful_cnt']}/{policy['min_helpful']} lần hữu ích")
     if ku["harmful_cnt"] > 0:

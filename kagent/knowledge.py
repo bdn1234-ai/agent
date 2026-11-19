@@ -163,6 +163,11 @@ def rollback(conn, tenant_id: str, event_id: int, actor: str) -> dict:
     return update(conn, tenant_id, ev["ku_id"], {f: before[f] for f in fields}, "ROLLBACK", actor, f"hoàn tác sự kiện #{event_id}")
 
 
+def source_count(source_eps: list[str]) -> int:
+    """Số nguồn độc lập: các đoạn "doc:<id>#<n>" của cùng một tài liệu chỉ tính là một nguồn."""
+    return len({e.split("#", 1)[0] for e in source_eps})
+
+
 def recompute_confidence(ku: dict) -> float:
     """Làm trơn Laplace trên bộ đếm, kéo theo độ tin cậy của nguồn."""
     prior = {"user": 0.8, "verified_tool": 0.65, "internal_doc": 0.6, "external_untrusted": 0.2}[ku["source_trust"]]

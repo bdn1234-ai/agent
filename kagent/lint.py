@@ -42,10 +42,14 @@ def entity_suggestions(conn, tenant_id: str) -> list[dict]:
 
 
 def expire_candidates(conn, tenant_id: str, days: int, actor: str = "lint") -> list[dict]:
-    """Ứng viên quá hạn mà chưa có episode thứ hai xác nhận thì loại. Ký ức cá nhân không bị đụng tới."""
+    """Ứng viên quá hạn mà chưa có nguồn thứ hai xác nhận thì loại.
+
+    Không đụng tới ký ức cá nhân và KU từ tài liệu được tải lên: đó là thứ người dùng chủ động đưa vào, không phải nhiễu tự sinh.
+    """
     cutoff = db.later(days=-days)
-    rs = conn.execute("SELECT id, title FROM knowledge_unit WHERE tenant_id=? AND status='candidate' AND scope NOT LIKE 'user:%' "
-                      "AND recorded_at < ? AND json_array_length(source_eps) < 2 ORDER BY recorded_at", (tenant_id, cutoff)).fetchall()
+    rs = [r for r in conn.execute("SELECT id, title, source_eps FROM knowledge_unit WHERE tenant_id=? AND status='candidate' AND scope NOT LIKE 'user:%' "
+                                  "AND source_trust!='internal_doc' AND recorded_at < ? ORDER BY recorded_at", (tenant_id, cutoff)).fetchall()
+          if knowledge.source_count(json.loads(r["source_eps"])) < 2]
     for r in rs:
         knowledge.update(conn, tenant_id, r["id"], {"status": "rejected"}, "EXPIRE", actor,
                          f"ứng viên quá {days} ngày chưa được duyệt hay episode khác xác nhận")

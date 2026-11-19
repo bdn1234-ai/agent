@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import agent as agent_mod
-from . import automode, compiler, connections, db, entities, gateway, incidents, knowledge, learned, learning, lint, llm, net, proxy, tools, undo, vault
+from . import automode, compiler, connections, db, entities, gateway, incidents, knowledge, learned, learning, lint, llm, net, proxy, sources, tools, undo, vault
 from . import live
 from .connectors import k8s_rbac
 from .connectors.base import ConnectorError
@@ -108,6 +108,7 @@ async def lifespan(_: FastAPI):
     seed()
     with db.session() as conn:
         entities.renormalize(conn)
+        sources.resume(conn)
     resume_consolidations()
     sched = Scheduler()
     if settings.scheduler_enabled:
@@ -853,6 +854,7 @@ def ku_detail(ku_id: str, t: Tenant = Depends(current_tenant), conn=Depends(get_
     ku.pop("embedding", None)
     ku["events"] = db.rows(conn.execute("SELECT id, op, actor, reason, at FROM ku_event WHERE ku_id=? AND tenant_id=? ORDER BY id DESC", (ku_id, t.tenant_id)).fetchall())
     ku["edges"] = db.rows(conn.execute("SELECT src, dst, rel FROM ku_edge WHERE tenant_id=? AND (src=? OR dst=?)", (t.tenant_id, ku_id, ku_id)).fetchall())
+    ku["sources"] = sources.resolve(conn, t.tenant_id, ku["source_eps"])
     return ku
 
 
@@ -925,6 +927,49 @@ def knowledge_lint(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
 def knowledge_lint_run(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
     t.require_admin()
     return lint.run(conn, t.tenant_id, t.principal.username)
+
+
+class NewSource(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=sources.MAX_CHARS)
+    activate: bool = False
+
+
+def _source_view(conn, t, doc: dict, full: bool = False) -> dict:
+    out = {k: doc[k] for k in ("id", "kind", "title", "trust", "status", "result", "created_by", "created_at", "done_at")}
+    out["chars"] = len(doc["content"])
+    if full:
+        out["chunks"] = sources.chunks(doc["title"], doc["content"])
+        out["kus"] = sources.kus_of(conn, t.tenant_id, doc["id"])
+    return out
+
+
+@app.get("/api/knowledge/sources")
+def source_list(t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    rs = db.rows(conn.execute("SELECT * FROM source_doc WHERE tenant_id=? ORDER BY created_at DESC LIMIT 200", (t.tenant_id,)).fetchall(), "result")
+    return [_source_view(conn, t, d) for d in rs]
+
+
+@app.post("/api/knowledge/sources")
+def source_add(body: NewSource, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    """Tài liệu nội bộ (runbook, postmortem, ghi chú) thành KU ứng viên; admin có thể chấp nhận luôn khi tải lên."""
+    t.require_writer()
+    if body.activate:
+        t.require_admin()
+    try:
+        doc = sources.add(conn, t.tenant_id, title=body.title, content=body.content, created_by=t.principal.username, user_id=t.user_id, activate=body.activate)
+    except sources.SourceError as e:
+        raise HTTPException(400, str(e))
+    sources.start(t.tenant_id, doc["id"])
+    return _source_view(conn, t, doc)
+
+
+@app.get("/api/knowledge/sources/{doc_id}")
+def source_detail(doc_id: str, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    doc = sources.get(conn, t.tenant_id, doc_id)
+    if doc is None:
+        raise HTTPException(404, "không tìm thấy tài liệu")
+    return _source_view(conn, t, doc, full=True)
 
 
 @app.post("/api/ku")

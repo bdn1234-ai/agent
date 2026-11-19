@@ -34,6 +34,7 @@ class Settings:
         self.confirm_threshold = 0.9
         # Ứng viên chưa từng được duyệt sau 4 ngày tuổi (số liệu 11-19/11), nên quá 7 ngày coi như bị bỏ quên.
         self.lint_stale_days = int(env("KAGENT_LINT_STALE_DAYS", "7"))
+        self.incident_learn = env("KAGENT_INCIDENT_LEARN", "1") == "1"  # sự cố đã xử lý xong thành nguồn tri thức (sources.py)
         self.budget_core = 1500
         self.budget_playbook = 3000
         self.budget_ku = 2000

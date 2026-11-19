@@ -569,6 +569,13 @@ VIEWS.episodes = async (main) => {
     h("tbody", {}, list.map((e) => h("tr", { class: "click", onclick: open(e.id) }, h("td", {}, fmtTime(e.started_at)), h("td", {}, e.input.task), h("td", {}, e.task_type), h("td", {}, e.env), h("td", {}, badge(e.outcome)), h("td", {}, e.user), h("td", {}, e.processed_at ? "rồi" : "chưa")))))), detail);
 };
 
+function kuSources(list) {
+  const eps = list.filter((x) => x.type === "episode").length;
+  const docs = list.filter((x) => x.type !== "episode");
+  const parts = [eps ? `${eps} episode` : null, ...docs.map((d) => `${d.type === "incident" ? "" : "tài liệu "}"${d.title}"${d.section ? ` đoạn ${d.section}` : ""}`)].filter(Boolean);
+  return [parts.join(" · ") || "không có"];
+}
+
 // Kết quả kiểm tra định kỳ (lint.py): chỉ việc loại ứng viên quá hạn đã tự làm, còn lại là gợi ý để admin bấm.
 function lintCard(report, reload) {
   const box = h("div", { class: "card" });
@@ -616,7 +623,7 @@ async function knowledgeUnitsView(main) {
   const showKu = (id) => guard(async () => {
     const ku = await api("GET", `/api/ku/${id}`);
     detail.replaceChildren(h("div", { class: "card" }, h("h3", {}, "Lịch sử: " + ku.title),
-      h("div", { class: "small" }, `Nguồn: ${ku.source_trust} · ${ku.source_eps.length} episode · phiên bản ${ku.version}`),
+      h("div", { class: "small" }, `Nguồn: ${ku.source_trust} · phiên bản ${ku.version} · `, ...kuSources(ku.sources)),
       h("table", {}, h("tbody", {}, ku.events.map((ev) => h("tr", {}, h("td", {}, fmtTime(ev.at)), h("td", {}, ev.op), h("td", {}, ev.actor), h("td", {}, ev.reason || ""),
         h("td", {}, isAdmin() && h("button", { class: "ghost", onclick: guard(async () => { await api("POST", `/api/ku/events/${ev.id}/rollback`); toast("Đã hoàn tác"); await load(); }) }, "Hoàn tác"))))))));
   });
@@ -1555,10 +1562,59 @@ async function toolCatalogView(main) {
 }
 
 VIEWS.tools = (main) => subTabs(main, [["connections", "Kết nối", connectionsView], ["catalog", "Danh mục & quyền", toolCatalogView]]);
-VIEWS.knowledge = (main) => subTabs(main, [["graph", "Đồ thị (L3)", knowledgeGraphView], ["units", "Tri thức (L1)", knowledgeUnitsView],
-  ["compiled", "Runbook (L2)", compiledView]]);
+// Nguồn ngoài episode (sources.py): tài liệu tải lên và bản ghi sự cố đã xử lý xong, mỗi đoạn tách thành KU qua Curator.
+async function knowledgeSourcesView(main) {
+  const SOURCE_KIND = { doc: "tài liệu", incident: "sự cố" };
+  const list = h("div");
+  const detail = h("div");
+  const title = persist(h("input", { class: "wide", placeholder: "Tiêu đề, vd. Runbook khôi phục etcd", "aria-label": "Tiêu đề tài liệu" }), "src:title");
+  const content = persist(h("textarea", { rows: 8, placeholder: "Dán nội dung markdown hoặc chọn file .md/.txt. Mỗi mục # / ## / ### được đọc riêng.", "aria-label": "Nội dung tài liệu" }), "src:content");
+  const file = h("input", { type: "file", accept: ".md,.markdown,.txt,text/markdown,text/plain", "aria-label": "Chọn file", onchange: guard(async () => {
+    const f = file.files[0];
+    if (!f) return;
+    content.value = await f.text();
+    if (!title.value) title.value = f.name.replace(/\.[^.]+$/, "");
+  }) });
+  const activate = h("input", { type: "checkbox" });
+  const showDoc = (id) => guard(async () => {
+    const d = await api("GET", `/api/knowledge/sources/${id}`);
+    const bySection = new Map();
+    for (const ku of d.kus) for (const n of ku.sections) bySection.set(n, [...(bySection.get(n) || []), ku]);
+    detail.replaceChildren(h("div", { class: "card" }, h("div", { class: "row spread" }, h("h3", {}, d.title), h("span", {}, badge(d.status))),
+      h("div", { class: "small" }, `${SOURCE_KIND[d.kind] || d.kind} · nguồn ${d.trust} · ${num(d.chars)} ký tự · ${d.chunks.length} đoạn · ${d.kus.length} KU`),
+      d.result && d.result.errors && d.result.errors.length > 0 && h("div", { class: "small warn" }, d.result.errors.join("; ")),
+      ...d.chunks.map((c, i) => h("details", {}, h("summary", {}, `${i + 1}. ${c.section} `, h("span", { class: "small muted" }, `${(bySection.get(i + 1) || []).length} KU`)),
+        h("ul", { class: "small" }, (bySection.get(i + 1) || []).map((ku) => h("li", {}, badge(ku.status), " ", h("span", { class: "badge info" }, ku.kind), " ", ku.title))),
+        h("pre", { class: "small" }, c.text)))));
+  });
+  async function load() {
+    const docs = await api("GET", "/api/knowledge/sources");
+    list.replaceChildren(docs.length ? h("div", { class: "card scroll" }, h("table", {},
+      h("thead", {}, h("tr", {}, ["Thời gian", "Tiêu đề", "Loại", "Trạng thái", "Đoạn", "KU", "Người tải"].map((x) => h("th", {}, x)))),
+      h("tbody", {}, docs.map((d) => h("tr", { class: "click", onclick: showDoc(d.id) }, h("td", {}, fmtTime(d.created_at)), h("td", {}, d.title),
+        h("td", {}, SOURCE_KIND[d.kind] || d.kind), h("td", {}, d.status === "running" || d.status === "pending" ? busy("đang đọc") : badge(d.status)),
+        h("td", {}, d.result ? num(d.result.chunks || 0) : "—"), h("td", {}, d.result ? num(d.result.kus || 0) : "—"), h("td", {}, d.created_by || "")))))) :
+      h("div", { class: "card muted" }, "Chưa có tài liệu nào. Sự cố đã xử lý xong cũng tự vào đây."));
+    if (docs.some((d) => d.status === "pending" || d.status === "running")) setTimeout(() => { if (document.contains(list)) load().catch(() => {}); }, 3000);
+  }
+  const upload = guard(async () => {
+    const d = await api("POST", "/api/knowledge/sources", { title: title.value, content: content.value, activate: activate.checked });
+    title.value = content.value = ""; file.value = ""; store.set("src:title", null); store.set("src:content", null);
+    toast(`Đang đọc "${d.title}"; KU tách ra sẽ là ứng viên${activate.checked ? " và được chấp nhận luôn" : ""}`);
+    await load();
+  });
+  main.append(h("h2", {}, "Nguồn tri thức"),
+    h("div", { class: "card" }, h("p", { class: "small" }, "Tài liệu được lưu nguyên bản; mỗi mục được tách thành KU, đi qua Curator (gộp với KU đã có) và cổng duyệt như tri thức học từ chat."),
+      title, content, h("div", { class: "row" }, file, isAdmin() && h("label", { class: "small" }, activate, " Chấp nhận luôn các KU tách ra (tôi bảo đảm tài liệu này)"),
+        h("span", { class: "spacer" }), h("button", { type: "button", onclick: upload }, "Tải lên và đọc"))),
+    detail, list);
+  await load();
+}
 
-const PURPOSE = { agent: "Agent trả lời", route: "Router", check_plan: "Kiểm tra độc lập", reflect: "Reflector", curate: "Curator", judge: "Chấm kết quả", other: "Khác" };
+VIEWS.knowledge = (main) => subTabs(main, [["graph", "Đồ thị (L3)", knowledgeGraphView], ["units", "Tri thức (L1)", knowledgeUnitsView],
+  ["compiled", "Runbook (L2)", compiledView], ["sources", "Nguồn", knowledgeSourcesView]]);
+
+const PURPOSE = { agent: "Agent trả lời", route: "Router", check_plan: "Kiểm tra độc lập", reflect: "Reflector", curate: "Curator", extract: "Đọc tài liệu", consolidate: "Tổng hợp KU", judge: "Chấm kết quả", other: "Khác" };
 const num = (v) => (v === null || v === undefined ? "—" : Number(v).toLocaleString("vi-VN"));
 
 const SVG_NS = "http://www.w3.org/2000/svg";

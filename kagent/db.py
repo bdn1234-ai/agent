@@ -147,6 +147,15 @@ CREATE TABLE IF NOT EXISTS ku_consolidation (
   created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 );
 
+-- Nguồn tri thức ngoài episode (sources.py): tài liệu tải lên, bản ghi sự cố. ref của sự cố = <incident_id>@<cause_at>.
+CREATE TABLE IF NOT EXISTS source_doc (
+  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, kind TEXT NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL,
+  trust TEXT NOT NULL, ref TEXT, created_by TEXT, user_id TEXT, activate INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending', result TEXT, created_at TEXT NOT NULL, done_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_source_doc ON source_doc(tenant_id, status, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_source_doc_ref ON source_doc(tenant_id, kind, ref) WHERE ref IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS ku_lint (tenant_id TEXT PRIMARY KEY, report TEXT NOT NULL, at TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS tool_result (
