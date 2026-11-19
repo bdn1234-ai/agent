@@ -267,3 +267,42 @@ def test_no_skill_tool_without_skills(users, knowledge):
     llm.set_provider(provider)
     _chat(users["alice"], "xem pod")
     assert all(t["tool"] != conversation.SKILL_TOOL for t in provider.tools) and "<skills" not in provider.context
+
+
+# --- Công cụ tra tri thức giữa lượt ---
+
+class KnowledgeReader(Recording):
+    def run_agent(self, task, context, tools, call_tool, history=None, on_text=None, cancelled=None, turn_context=""):
+        self.tools = tools
+        self.steps = [call_tool(conversation.SEARCH_TOOL, {"query": "kibana index"}), call_tool(conversation.SEARCH_TOOL, {"query": " "}),
+                      call_tool(conversation.PAGE_TOOL, {"entity": "Kibana"}), call_tool(conversation.PAGE_TOOL, {"entity": "index"}),
+                      call_tool(conversation.PAGE_TOOL, {"entity": "khong-co"})]
+        return super().run_agent(task, context, tools, call_tool, history, on_text, cancelled, turn_context)
+
+
+def test_agent_searches_knowledge_and_reads_pages(users, knowledge):
+    extra = {**_ku(3, "index log nằm ở k8s-staging-*"), "entities": ["kibana"]}
+    knowledge.state["kus"] = [extra]
+    knowledge.state["files"].update({"entities/kibana.md": "# kibana\n\n1 tri thức đang hiệu lực.\n", "entities/index.md": "# Thực thể\n\n- kibana (1)\n"})
+    provider = KnowledgeReader()
+    llm.set_provider(provider)
+    episode, _ = _chat(users["alice"], "xem pod")
+    names = [t["tool"] for t in provider.tools]
+    assert conversation.SEARCH_TOOL in names and conversation.PAGE_TOOL in names
+    search, empty, page, index, missing = provider.steps
+    assert search["status"] == "ok" and search["result"]["results"][0]["id"] == "ku:00000003" and search["result"]["pages"] == ["kibana"]
+    assert empty["status"] == "invalid"
+    assert page["status"] == "ok" and page["result"]["content"].startswith("# kibana")
+    assert "kibana (1)" in index["result"]["content"]
+    assert missing["status"] == "invalid" and "index" in missing["reasons"][0]
+    with db.session() as conn:
+        used = json.loads(conn.execute("SELECT ku_used FROM episode WHERE id=?", (episode["id"],)).fetchone()["ku_used"])
+    assert extra["id"] in used  # KU tìm giữa lượt cũng được tính hữu ích/có hại như KU nạp đầu lượt
+
+
+def test_knowledge_tools_present_without_any_knowledge(users, knowledge):
+    knowledge.state.update(files={}, kus=[])
+    provider = SkillReader()
+    llm.set_provider(provider)
+    _chat(users["alice"], "xem pod")
+    assert {conversation.SEARCH_TOOL, conversation.PAGE_TOOL} <= {t["tool"] for t in provider.tools}

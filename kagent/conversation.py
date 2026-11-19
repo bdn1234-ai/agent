@@ -15,6 +15,19 @@ from .config import settings
 from .retrieval import retrieve
 
 SKILL_TOOL = "read_skill"
+SEARCH_TOOL = "search_knowledge"
+PAGE_TOOL = "read_knowledge_page"
+SEARCH_K = 8
+PAGE_CHARS = 12000
+SEARCH_DESCRIPTION = ("Tìm thêm trong kho tri thức của nhóm (bài học, sự thật, quy trình đã kiểm chứng, nguyên nhân sự cố cũ) khi tri thức "
+                      "gửi kèm lượt chưa đủ, hoặc khi giữa chừng gặp service, lỗi, chủ đề mới. Trả về các KU khớp nhất và tên trang thực thể liên quan.")
+PAGE_DESCRIPTION = ("Đọc trang của một thực thể (service, cụm, index, mã lỗi, công cụ): mọi tri thức đang hiệu lực về nó theo loại, "
+                    "sự cố đã gặp, thực thể và tri thức liên quan. Tên lấy từ kết quả search_knowledge hoặc trang \"index\" (danh sách mọi trang).")
+SEARCH_SCHEMA = {"type": "object", "required": ["query"], "properties": {
+    "query": {"type": "string", "description": "Câu hỏi hoặc từ khóa, vd. \"wikijs lỗi migration\""},
+    "entities": {"type": "array", "items": {"type": "string"}, "description": "Tên thực thể cụ thể nếu biết, để ưu tiên KU gắn với chúng"}}}
+PAGE_SCHEMA = {"type": "object", "required": ["entity"], "properties": {
+    "entity": {"type": "string", "description": "Tên thực thể đúng như trong tri thức, hoặc \"index\" để xem danh sách trang"}}}
 STYLE_TEXT = {"concise": "Người dùng muốn câu trả lời ngắn gọn, đi thẳng vào kết quả.",
               "detailed": "Người dùng muốn câu trả lời chi tiết, có giải thích từng bước."}
 APPROVED_RESULT_CHARS = 24000  # tổng cho mọi lệnh đã duyệt của lượt mới nhất
@@ -152,6 +165,31 @@ def _tool_notes(conn, tenant_id: str, tool_names: list[str], skip: set[str], in_
             lines.append(line)
             ids.append(r["id"])
     return lines, ids
+
+
+def search_tool(conn, tenant_id: str, args: dict, files: dict[str, str], *, project=None, user_id=None) -> tuple[dict, list[str]]:
+    """Kết quả cho search_knowledge và id KU đã trả về (tính vào ku_used như tri thức nạp đầu lượt)."""
+    query = str(args.get("query") or "").strip()
+    if not query:
+        return {"error": "cần query"}, []
+    wanted = [e for e in args.get("entities") or [] if isinstance(e, str)][:5]
+    kus = retrieve(conn, tenant_id, query, project=project, user_id=user_id, entities=wanted or None, k=SEARCH_K)
+    pages = []
+    for ku in kus:
+        for e in ku.get("entities") or []:
+            if e not in pages and compiler.find_page(files, e):
+                pages.append(e)
+    items = [{"id": f"ku:{ku['id'][:8]}", "kind": ku["kind"], "title": ku["title"], "content": ku["content"],
+              **({"applies_when": ku["applies_when"]} if ku.get("applies_when") else {}), "entities": ku.get("entities") or []} for ku in kus]
+    return {"results": items, "pages": pages[:10]} if items else {"results": [], "note": "không có tri thức nào khớp"}, [ku["id"] for ku in kus]
+
+
+def page_tool(files: dict[str, str], args: dict) -> tuple[dict | None, str | None]:
+    entity = str(args.get("entity") or "").strip()
+    path = "entities/index.md" if entity.lower() == "index" else compiler.find_page(files, entity) if entity else None
+    if path and path in files:
+        return {"content": _clip_chars(files[path], PAGE_CHARS)}, None
+    return None, f"không có trang cho {entity!r}; gọi {PAGE_TOOL} với entity=\"index\" để xem danh sách, hoặc dùng {SEARCH_TOOL}"
 
 
 def select_knowledge(conn, tenant_id: str, task: str, task_type: str, *, project=None, user_id=None, entities=None,

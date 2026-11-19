@@ -18,6 +18,8 @@ from .retrieval import tokenize
 from .tools import callable_by, max_tier
 
 PREFIX = "learned."
+# Công cụ agent xử lý tại chỗ, không có trong danh mục nên không thành bước của công cụ học được.
+LOCAL_TOOLS = frozenset({"read_skill", "search_knowledge", "read_knowledge_page", "ask_user"})
 EPHEMERAL = "data."  # data.query/data.script làm việc trên result_id của một lượt cụ thể nên không dùng lại được
 PLACEHOLDER = re.compile(r"^\{\{([a-z_][a-z0-9_]{0,30})\}\}$")
 # {{step:N}}: kết quả đầy đủ của bước N, chỉ dùng làm dữ liệu đầu vào cho công cụ local (data.*), không bao giờ cho lệnh gọi ra ngoài.
@@ -300,7 +302,7 @@ def propose(conn, tenant_id: str) -> int:
                       (tenant_id, db.later(days=-30))).fetchall()
     groups: dict[tuple, list] = defaultdict(list)
     for r in rs:
-        steps = [s for s in json.loads(r["trace"]) if s["type"] == "tool_call" and not s["tool"].startswith(EPHEMERAL)]
+        steps = [s for s in json.loads(r["trace"]) if s["type"] == "tool_call" and not s["tool"].startswith(EPHEMERAL) and s["tool"] not in LOCAL_TOOLS]
         if len(steps) < 2 or any(s["status"] != "ok" or s["tool"].startswith(PREFIX) for s in steps) or _tainted(steps):
             continue
         groups[tuple(s["tool"] for s in steps)].append((r["id"], r["user_id"], steps))

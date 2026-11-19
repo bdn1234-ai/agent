@@ -9,7 +9,8 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import replace
 
 from . import compiler, connections, db, gateway, learned, live, llm, results
-from .conversation import SKILL_TOOL, build_turn, clean_answer, load_history, skill_files
+from .conversation import (PAGE_DESCRIPTION, PAGE_SCHEMA, PAGE_TOOL, SEARCH_DESCRIPTION, SEARCH_SCHEMA, SEARCH_TOOL, SKILL_TOOL, build_turn, clean_answer,
+                           load_history, page_tool, search_tool, skill_files)
 from .tools import callable_by
 
 
@@ -183,6 +184,19 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
                     "reasons": [] if path else [f"không có skill này; skill hiện có: {', '.join(sorted(skills)) or '(không có)'}"]}
             emit({"type": "tool_end", "step": step})
             return step
+        if name == SEARCH_TOOL:
+            result, found = search_tool(c, tenant_id, args, files, project=project, user_id=user_id)
+            ku_used.extend(i for i in found if i not in ku_used)
+            step = {"type": "tool_call", "tool": SEARCH_TOOL, "args": args, "env": env, "decision": "allowed",
+                    "status": "invalid" if "error" in result else "ok", "result": result, "reasons": [result["error"]] if "error" in result else []}
+            emit({"type": "tool_end", "step": step})
+            return step
+        if name == PAGE_TOOL:
+            result, why = page_tool(files, args)
+            step = {"type": "tool_call", "tool": PAGE_TOOL, "args": args, "env": env, "decision": "allowed",
+                    "status": "ok" if result else "invalid", "result": result, "reasons": [why] if why else []}
+            emit({"type": "tool_end", "step": step})
+            return step
         if read_only and name not in allowed:
             step = {"type": "tool_call", "tool": name, "args": args, "env": env, "decision": "blocked", "status": "blocked",
                     "reasons": ["lượt này chỉ được dùng công cụ đọc"]}
@@ -202,7 +216,7 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
             return run_one(c, name, args)
 
     def is_read(name: str) -> bool:
-        if name == SKILL_TOOL:
+        if name in (SKILL_TOOL, SEARCH_TOOL, PAGE_TOOL):
             return True
         r = conn.execute("SELECT action_class FROM tool_registry WHERE tenant_id=? AND tool=?", (tenant_id, name)).fetchone()
         return bool(r and r["action_class"] == "read")
@@ -288,6 +302,9 @@ def _run_task(conn, tenant_id: str, user_id: str, task: str, env: str, project: 
             tool_list.append({"tool": ASK_TOOL, "description": ASK_DESCRIPTION, "input_schema": ASK_SCHEMA, "canonical": ASK_TOOL, "action_class": "read"})
         files.update(compiler.read_published(tenant_id))
         skills.update(skill_files(files))
+        # Luôn có, kể cả khi kho còn trống: công cụ xuất hiện theo điều kiện thì đổi prefix (mất cache) mỗi lần điều kiện đổi.
+        tool_list.append({"tool": SEARCH_TOOL, "description": SEARCH_DESCRIPTION, "action_class": "read", "canonical": SEARCH_TOOL, "input_schema": SEARCH_SCHEMA})
+        tool_list.append({"tool": PAGE_TOOL, "description": PAGE_DESCRIPTION, "action_class": "read", "canonical": PAGE_TOOL, "input_schema": PAGE_SCHEMA})
         if skills:
             tool_list.append({"tool": SKILL_TOOL, "description": SKILL_DESCRIPTION, "action_class": "read", "canonical": SKILL_TOOL,
                               "input_schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "enum": sorted(skills)}}}})

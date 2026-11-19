@@ -136,6 +136,7 @@ Theo cách Claude Code hỏi và chờ người dùng.
 - **Agent không được nói "đang chờ duyệt" khi lượt đó không có lệnh nào chờ.** Câu kết thúc nói vậy thì runner nhắc agent một lần, để agent gọi công cụ hoặc viết lại câu trả lời.
 - **`ask_user`:** agent hỏi 1–4 câu, mỗi câu 2–4 lựa chọn (lựa chọn khuyên dùng đứng đầu), giao diện tự thêm ô "Khác". Chỉ có một câu chọn một thì bấm là gửi luôn. Câu trả lời đi như tin nhắn của người dùng ở lượt sau. Gọi `ask_user` xong, các lệnh khác trong lượt bị chặn. Không có `ask_user` trong lượt điều tra sự cố.
 - **`read_skill`:** đọc toàn bộ `SKILL.md` của một skill đã publish; system chỉ chứa tên và mô tả của skill. Chỉ có khi tenant có skill, tham số `name` giới hạn trong danh sách skill hiện có. Chạy thẳng, không qua gateway hay duyệt, dùng được cả trong lượt điều tra sự cố.
+- **`search_knowledge`, `read_knowledge_page`:** agent tự tra kho tri thức giữa lượt. `search_knowledge` dùng đúng truy xuất lai của đầu lượt (8 KU) và trả kèm tên các trang thực thể liên quan; KU tìm được tính vào `ku_used` nên cũng được cộng điểm hữu ích hay có hại. `read_knowledge_page` đọc `entities/<thực thể>.md` (tối đa 12k ký tự), `entity="index"` cho danh sách trang. Luôn có trong danh sách công cụ, kể cả khi kho trống, để prefix không đổi theo điều kiện. Chạy thẳng, không qua gateway, dùng được cả trong lượt chỉ đọc.
 
 ## Quyền Kubernetes và công cụ kubectl
 
