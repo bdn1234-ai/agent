@@ -302,3 +302,23 @@ Theo cách của auto mode trong Claude Code.
   - Một ô ghi chú cho cả Chạy và Từ chối; ghi chú khi chạy được gửi cho agent sau kết quả. Từ chối không còn bắt buộc lý do.
 - **Công cụ `ask_user`:** agent hỏi bằng nút lựa chọn, có ô "Khác".
 
+## Đợt 37 — 2026-11-19: kho tri thức kiểu "LLM wiki"
+
+Theo ý tưởng "LLM wiki" của Karpathy (raw / wiki / luật xử lý; ingest, query, lint), áp vào khung KU có duyệt và audit.
+Số trên dữ liệu thật trước khi làm: 316 ứng viên so với 54 KU đang dùng, 94 cạnh (đều `refines`), 98/137 thực thể chỉ ở một KU,
+tri thức chỉ đến từ episode.
+- **Kiểm tra mỗi ngày (`lint.py`):** ứng viên chung quá 7 ngày chưa được duyệt hay nguồn thứ hai xác nhận thì chuyển `rejected`
+  (op `EXPIRE`, hoàn tác được). 7 ngày vì chưa ứng viên nào được duyệt sau 4 ngày tuổi. Báo cáo ở màn Tri thức (L1): nhóm tên
+  thực thể chỉ khác dấu nối/số nhiều kèm nút gộp, ứng viên mâu thuẫn với KU đang dùng, KU 30 ngày không được nạp.
+  Lần đầu loại 12 ứng viên, gợi ý 3 nhóm tên.
+- **Nguồn ngoài episode (`sources.py`):** tab Tri thức > Nguồn nhận markdown/txt; cắt theo tiêu đề, mỗi đoạn tối đa 6 KU, admin
+  có thể chấp nhận luôn. Sự cố resolved/closed có nguyên nhân (độ tin ≥ 0,5) được đọc nguyên ca, tối đa 3 KU; đọc theo từng mục
+  thì một sự cố ra 11 KU lặp ý. Nhiều đoạn của một tài liệu chỉ tính là một nguồn khi xét xác nhận độc lập. 13 sự cố cũ cho 31 KU.
+- **Cạnh `related`:** Curator nối KU mới tới tối đa 3 KU, điểm = tổng IDF thực thể chung + 2×cosine, ngưỡng 6 (ngưỡng 5 kéo vào
+  cặp chỉ chung "token", "log"). Lint nối bù: 489 cạnh. Golden giữ 0,9.
+- **Trang thực thể:** mọi thực thể có từ 2 KU (hoặc có fact) thành một trang, dựng từ KU chứ không do LLM viết. 42 → 60 trang.
+- **Agent tự tra:** `search_knowledge`, `read_knowledge_page`; KU tìm được tính vào `ku_used`. Luôn có trong danh sách công cụ.
+- **Lưu từ câu trả lời:** nút "Lưu vào tri thức" trong chat. Lưu cho nhóm từ câu trả lời dựa trên nội dung ngoài thì KU mang mức
+  `external_untrusted`; ký ức cá nhân có hiệu lực ngay.
+- **Chưa làm:** đoạn tóm tắt do LLM viết ở đầu trang thực thể. Còn mở: khoảng 54 ứng viên mới mỗi ngày, lint chỉ chặn tồn đọng
+  ở mức khoảng một tuần; muốn giảm hẳn phải giảm lượng Reflector sinh ra.
