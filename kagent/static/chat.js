@@ -16,6 +16,7 @@ const ICONS = {
   chevron: "M9 6l6 6-6 6",
   down_arrow: "M12 5v14M5 12l7 7 7-7",
   save: "M6 4h12v16l-6-4-6 4z",
+  book: "M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3zM5 17a3 3 0 013-3h11",
 };
 
 function icon(name) {
@@ -521,7 +522,30 @@ function chatView(main) {
       row.after(box);
       name.focus();
     });
+    const remember = m.output && iconButton("book", "Lưu vào tri thức", () => {
+      if (row.nextElementSibling && row.nextElementSibling.classList.contains("ku-box")) return;
+      const text = (m.output || "").trim();
+      const kind = h("select", { "aria-label": "Loại" }, [["fact", "Sự thật"], ["procedure", "Thủ tục"], ["lesson", "Bài học"], ["insight", "Chiến lược"], ["rule", "Quy ước"]]
+        .map(([v, l]) => h("option", { value: v }, l)));
+      const title = h("input", { class: "wide", value: text.split("\n")[0].replace(/^[#*\s-]+/, "").slice(0, 120), "aria-label": "Tiêu đề" });
+      const content = h("textarea", { class: "edit-area", value: text.slice(0, 2000), "aria-label": "Nội dung" });
+      const when = h("input", { class: "wide", placeholder: "Áp dụng khi… (không bắt buộc)", "aria-label": "Điều kiện áp dụng" });
+      const scope = h("select", { "aria-label": "Phạm vi" }, h("option", { value: "tenant" }, "Cả nhóm (qua cổng duyệt)"), h("option", { value: "user" }, "Chỉ mình tôi"));
+      const box = h("div", { class: "edit-box ku-box" },
+        h("div", { class: "small" }, "Giữ đúng một ý dùng lại được; bỏ chi tiết riêng của lần này. Agent sẽ thấy tri thức này ở các lượt sau."),
+        h("div", { class: "row" }, kind, scope), title, content, when,
+        h("div", { class: "row" }, h("button", { type: "button", class: "ghost", onclick: () => box.remove() }, "Hủy"),
+          h("button", { type: "button", onclick: guard(async () => {
+            const ku = await api("POST", `/api/episodes/${m.id}/knowledge`, { kind: kind.value, title: title.value, content: content.value, applies_when: when.value || null, scope: scope.value });
+            box.remove();
+            toast(ku.status === "active" ? "Đã lưu vào ký ức của bạn" : ku.source_trust === "external_untrusted"
+              ? "Đã lưu thành ứng viên; câu trả lời dựa trên nội dung ngoài (log, web) nên cần admin duyệt" : "Đã lưu thành ứng viên của nhóm");
+          }) }, "Lưu")));
+      row.after(box);
+      content.focus();
+    });
     row.append(copyBtn, up, down, edit);
+    if (remember) row.append(remember);
     if (saveTool) row.append(saveTool);
     if (m.task === lastTask) row.append(iconButton("retry", "Gửi lại", () => send(m.task)));
     row.append(h("span", { class: "meta" }, `${m.env} · ${m.ku_used} KU${m.tokens ? ` · ${m.tokens} token` : ""}`));

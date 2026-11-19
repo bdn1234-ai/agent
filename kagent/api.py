@@ -810,6 +810,38 @@ def feedback(episode_id: str, body: Feedback, t: Tenant = Depends(current_tenant
     return agent_mod.get_episode(conn, t.tenant_id, episode_id)
 
 
+class SaveAnswer(BaseModel):
+    kind: str
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=2000)
+    applies_when: str | None = Field(default=None, max_length=500)
+    scope: str = "tenant"
+
+
+@app.post("/api/episodes/{episode_id}/knowledge")
+def save_answer(episode_id: str, body: SaveAnswer, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
+    """Người dùng lưu một ý từ câu trả lời thành KU; episode là nguồn.
+
+    Lưu cho cả nhóm mà câu trả lời dựa trên nội dung ngoài (log, kết quả truy vấn) thì KU mang mức tin của nội dung đó, để không
+    "rửa" nó thành lời người dùng và lọt qua cổng tự thăng hạng. Ký ức cá nhân chỉ ảnh hưởng chính người lưu, họ đã đọc và sửa
+    nội dung, và không ai khác duyệt được nó, nên luôn có hiệu lực ngay.
+    """
+    t.require_writer()
+    if body.kind not in knowledge.KINDS or body.scope not in ("tenant", "user"):
+        raise HTTPException(400, "loại hoặc phạm vi không hợp lệ")
+    ep = agent_mod.get_episode(conn, t.tenant_id, episode_id)
+    if ep is None:
+        raise HTTPException(404, "không tìm thấy episode")
+    personal = body.scope == "user"
+    untrusted = not personal and any(s.get("untrusted") for s in ep["trace"] if isinstance(s, dict))
+    ku = knowledge.add(conn, t.tenant_id, kind=body.kind, title=body.title, content=body.content, applies_when=body.applies_when or None,
+                       entities=ep["input"].get("entities") or [], domain=ep.get("task_type") or "general", source_eps=[episode_id],
+                       source_trust="external_untrusted" if untrusted else "user", actor=t.principal.username, reason="lưu từ câu trả lời trong chat",
+                       scope=f"user:{t.user_id}" if personal else "tenant", status="active" if personal else "candidate")
+    knowledge.link_related(conn, t.tenant_id, ku["id"])
+    return _public(ku)
+
+
 @app.get("/api/ku")
 def ku_list(status: str | None = None, kind: str | None = None, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
     sql = ("SELECT id,kind,scope,domain,title,content,applies_when,entities,confidence,helpful_cnt,harmful_cnt,status,valid_to,recorded_at,source_eps,source_trust,version "

@@ -148,3 +148,20 @@ def test_metrics_shape(users):
     alice.run("xem pod")
     m = alice.get("/api/metrics").json()
     assert m["episodes"] == 1 and m["labeled_pct"] == 100.0 and m["weekly"][0]["tasks"] == 1
+
+
+
+def test_save_answer_as_knowledge(users):
+    alice = users["alice"]
+    plain = alice.run("chào bạn")
+    queried = alice.run("chạy `SELECT count(*) FROM orders`")
+    assert not any(s.get("untrusted") for s in plain["trace"]) and any(s.get("untrusted") for s in queried["trace"])
+    body = {"kind": "fact", "title": "Đếm đơn", "content": "Bảng orders có 6 đơn ở staging", "scope": "tenant"}
+    ku = alice.post(f"/api/episodes/{plain['id']}/knowledge", json=body).json()
+    assert ku["status"] == "candidate" and ku["source_trust"] == "user" and ku["source_eps"] == [plain["id"]]
+    tainted = alice.post(f"/api/episodes/{queried['id']}/knowledge", json=body).json()
+    assert tainted["source_trust"] == "external_untrusted" and tainted["status"] == "candidate"  # không rửa nội dung ngoài thành lời người dùng
+    mine = alice.post(f"/api/episodes/{queried['id']}/knowledge", json={**body, "scope": "user"}).json()
+    assert mine["status"] == "active" and mine["scope"].startswith("user:") and mine["source_trust"] == "user"
+    assert alice.post("/api/episodes/khong-co/knowledge", json=body).status_code == 404
+    assert alice.post(f"/api/episodes/{plain['id']}/knowledge", json={**body, "kind": "x"}).status_code == 400
