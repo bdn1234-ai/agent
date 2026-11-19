@@ -13,6 +13,8 @@
 | 4 Playbook theo độ liên quan | Hoãn | Số đo giai đoạn 5 cho thấy tri thức chỉ chiếm khoảng 7% input agent, và đó là trước khi bỏ trùng; playbook giờ chỉ gửi một lần mỗi hội thoại. Phần còn tiết kiệm được nhỏ, trong khi rủi ro mất tri thức cần thiết thì có thật. Riêng thiếu sót "có metadata Skill nhưng không có tool đọc `SKILL.md`" đã làm riêng: công cụ `read_skill` |
 | 5 Usage thật | Xong | Màn Đo lường có mục "Tri thức gửi kèm lượt" (ký tự mới, ký tự bỏ qua do trùng, tỷ lệ bỏ qua, tri thức trên input agent) và hai cột tương ứng ở bảng lượt tốn nhất. Token tri thức = ký tự/4 × số lần gọi agent của lượt, vì khối tri thức nằm trong prefix của mọi lần gọi. Số thật 30 lượt đầu: tri thức chiếm 7% input agent. Giữ `tokens_est` trong trace làm số ước lượng; số thật nằm ở `llm_call`. 785 test xanh |
 
+Sau kế hoạch (19/11, theo ý tưởng "LLM wiki"): truy xuất mở rộng theo cạnh `related` mới (498 cạnh trên dữ liệu thật) và agent có `search_knowledge`/`read_knowledge_page` để tự tra giữa lượt. Khối `<context>` không đổi, không gửi danh sách trang vào context: tên trang đi trong kết quả `search_knowledge` và trang `index`. Golden giữ 0,9 cả sau khi nối cạnh lẫn với trang thực thể mới.
+
 Ghi chú khi triển khai giai đoạn 2:
 
 - Thẻ playbook đổi thành `<knowledge section="playbook" task_type="…" rev="…">`. Lịch sử cũ chưa có `rev`, nên ở lượt đầu tiên sau khi deploy, playbook được gửi lại một lần.
