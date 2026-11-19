@@ -595,7 +595,8 @@ function lintCard(report, reload) {
     box.replaceChildren(
       h("div", { class: "row spread" }, h("b", {}, "Kiểm tra kho tri thức"), h("span", { class: "small muted" }, `lần gần nhất ${fmtTime(r.at)}`),
         h("button", { type: "button", class: "ghost", onclick: run }, "Kiểm tra ngay")),
-      h("div", { class: "small" }, `${b.candidates} ứng viên chờ duyệt${b.oldest ? `, cũ nhất từ ${fmtTime(b.oldest)}` : ""}; khoảng ${b.new_per_day} KU mới mỗi ngày.`),
+      h("div", { class: "small" }, `${b.candidates} ứng viên chờ duyệt${b.oldest ? `, cũ nhất từ ${fmtTime(b.oldest)}` : ""}; khoảng ${b.new_per_day} KU mới mỗi ngày.` +
+        (r.linked ? ` Đã nối thêm ${r.linked} cặp KU cùng chủ đề.` : "")),
       r.expired.length > 0 && h("details", {}, h("summary", { class: "small" }, `Đã loại ${r.expired.length} ứng viên quá ${r.stale_days} ngày chưa được duyệt hay xác nhận (hoàn tác được trong Lịch sử của từng KU)`),
         list(r.expired, (x) => h("li", {}, x.title))),
       r.entity_merges.length > 0 && h("details", { open: true }, h("summary", { class: "small" }, `${r.entity_merges.length} nhóm tên thực thể chỉ khác dấu nối hoặc số nhiều`),
@@ -1530,7 +1531,7 @@ async function knowledgeGraphView(main) {
     if (!data.nodes.length) return graphBox.replaceChildren(h("div", { class: "muted" }, "Không có tri thức nào khớp."));
     forceLayout(nodes, links, W, H);
     graphBox.replaceChildren(h("div", { class: "chart-legend" }, Object.entries(KIND_LABEL).map(([k, l]) => h("span", {}, h("span", { class: `sw ${KIND_CLASS[k]}` }), l)),
-      h("span", {}, h("span", { class: "sw ent-sw" }), "thực thể"), h("span", { class: "small muted" }, "nét đứt: gộp từ · đỏ: mâu thuẫn · viền rỗng: ứng viên · phóng to để xem tên")),
+      h("span", {}, h("span", { class: "sw ent-sw" }), "thực thể"), h("span", { class: "small muted" }, "nét đứt: gộp từ · nét màu: cùng chủ đề · đỏ: mâu thuẫn · viền rỗng: ứng viên · phóng to để xem tên")),
       graphCanvas({ nodes, links, W, H, onKu: showKu, onEntity: (e) => (e === entity ? showEntity(e) : setEntity(e)), selected: entity ? "e:" + entity : null }));
   }
 

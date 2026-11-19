@@ -30,3 +30,35 @@ def test_graph_hides_other_users_personal_knowledge(users):
     mine = _ku(alice.tenant, "Sở thích", "Tôi thích câu trả lời ngắn", [], scope=f"user:{uid}")
     assert mine["id"] in {n["id"] for n in alice.get("/api/knowledge/graph").json()["nodes"]}
     assert mine["id"] not in {n["id"] for n in a.get("/api/knowledge/graph").json()["nodes"]}
+
+
+def _edges(tenant, rel="related"):
+    with db.session() as conn:
+        return {(r["src"], r["dst"]) for r in conn.execute("SELECT src, dst FROM ku_edge WHERE tenant_id=? AND rel=?", (tenant, rel))}
+
+
+def test_related_links_rare_shared_entities_not_common_ones(users):
+    t = users["admin"].tenant
+    # "staging" có ở mọi KU nên IDF ≈ 0; "etcd-defrag" hiếm nên chung nó mới là cùng chủ đề.
+    fillers = [_ku(t, f"Ghi chú {i}", f"nội dung khác {i}", ["staging", f"svc-{i}"]) for i in range(40)]
+    a = _ku(t, "Defrag etcd", "Chạy defrag từng member khi db size lớn", ["staging", "etcd-defrag", "etcd"])
+    b = _ku(t, "Cảnh báo db size etcd", "Ngưỡng cảnh báo db size trước khi defrag", ["staging", "etcd-defrag", "etcd"])
+    with db.session() as conn:
+        assert knowledge.link_related(conn, t, a["id"]) == 1
+        assert knowledge.link_related(conn, t, a["id"]) == 0  # đã nối rồi thì không nối lại
+        assert knowledge.link_related(conn, t, fillers[0]["id"]) == 0
+    assert _edges(t) == {tuple(sorted((a["id"], b["id"])))}
+
+
+def test_related_respects_personal_scope(users):
+    t = users["admin"].tenant
+    mine = _ku(t, "Của alice", "defrag etcd theo cách của tôi", ["etcd-defrag", "etcd", "etcd-member"], scope="user:u1")
+    other = _ku(t, "Của bob", "defrag etcd theo cách của bob", ["etcd-defrag", "etcd", "etcd-member"], scope="user:u2")
+    shared = _ku(t, "Chung", "defrag etcd từng member", ["etcd-defrag", "etcd", "etcd-member"])
+    for i in range(40):
+        _ku(t, f"Khác {i}", "x", [f"svc-{i}"])
+    with db.session() as conn:
+        knowledge.link_related(conn, t, mine["id"])
+    assert _edges(t) == {tuple(sorted((mine["id"], shared["id"])))}
+    assert other["id"] not in {x for e in _edges(t) for x in e}
+

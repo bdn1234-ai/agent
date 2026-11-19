@@ -88,6 +88,13 @@ def _update_counters(conn, tenant_id: str, episode: dict, blamed: set[str], untr
 
 
 def curate_item(conn, tenant_id: str, provider, item: dict, episode: dict, trust: str) -> str:
+    op, ku_id = _curate(conn, tenant_id, provider, item, episode, trust)
+    if ku_id and op != "NOOP":
+        knowledge.link_related(conn, tenant_id, ku_id)
+    return op
+
+
+def _curate(conn, tenant_id: str, provider, item: dict, episode: dict, trust: str) -> tuple[str, str | None]:
     scope = f"user:{episode['user_id']}" if item.get("scope") == "user" else episode["scope"]
     candidates = near(conn, tenant_id, f"{item['title']} {item['content']}", item["kind"], settings.near_threshold, scope=scope)
     decision = provider.curate(item, candidates)
@@ -101,23 +108,21 @@ def curate_item(conn, tenant_id: str, provider, item: dict, episode: dict, trust
         sources = sorted(set(target_ku["source_eps"]) | {episode["id"]})
         if sources != target_ku["source_eps"]:
             knowledge.update(conn, tenant_id, target, {"source_eps": sources}, "UPDATE", "curator", "xác nhận từ episode độc lập")
-        return "NOOP"
+        return "NOOP", target
     if op in ("UPDATE", "MERGE") and target_ku:
         changes = {"content": item["content"], "applies_when": item["applies_when"],
                    "source_eps": sorted(set(target_ku["source_eps"]) | {episode["id"]})}
         if trust == "external_untrusted":
             # Nội dung chưa tin cậy không được sửa KU đang có; thêm thành ứng viên riêng để người xem xét.
-            knowledge.add(conn, tenant_id, **common, reason=decision["reason"])
-            return "ADD"
+            return "ADD", knowledge.add(conn, tenant_id, **common, reason=decision["reason"])["id"]
         knowledge.update(conn, tenant_id, target, changes, op, "curator", decision["reason"])
-        return op
+        return op, target
     if op == "INVALIDATE" and target_ku:
         with db.tx(conn):
             new = knowledge.add(conn, tenant_id, **common, reason=decision["reason"])
             knowledge.add_edge(conn, tenant_id, new["id"], target, "contradicts")
-        return "INVALIDATE"
-    knowledge.add(conn, tenant_id, **common, reason=decision["reason"])
-    return "ADD"
+        return "INVALIDATE", new["id"]
+    return "ADD", knowledge.add(conn, tenant_id, **common, reason=decision["reason"])["id"]
 
 
 def gate(conn, tenant_id: str) -> dict:

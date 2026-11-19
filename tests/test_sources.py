@@ -38,7 +38,7 @@ def test_upload_creates_candidates_traced_to_sections(users):
     d = _wait(admin, r.json()["id"])
     assert d["status"] == "done" and len(d["chunks"]) == 3
     assert {k["title"]: k["sections"] for k in d["kus"]} == {"Runbook etcd": [1], "Khôi phục etcd": [2], "Kiểm tra dung lượng": [3]}
-    ku = admin.get(f"/api/ku/{d['kus'][1]['id']}").json()
+    ku = admin.get(f"/api/ku/{next(k['id'] for k in d['kus'] if k['sections'] == [2])}").json()
     assert ku["status"] == "candidate" and ku["source_trust"] == "internal_doc"
     assert ku["source_eps"] == [f"doc:{d['id']}#2"]
     assert ku["sources"] == [{"type": "doc", "id": d["id"], "section": 2, "title": "Runbook etcd"}]

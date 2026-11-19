@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import sqlite3
 
 from . import db
 from .entities import normalize as normalize_entities
-from .retrieval import embed
+from .retrieval import cosine, embed
 
 KU_JSON = ("entities", "source_eps", "embedding")
 
@@ -132,6 +133,50 @@ def add_edge(conn, tenant_id: str, src: str, dst: str, rel: str) -> None:
     conn.execute("INSERT OR IGNORE INTO ku_edge(tenant_id,src,dst,rel) VALUES (?,?,?,?)", (tenant_id, src, dst, rel))
 
 
+RELATED_MIN = 6.0  # thử trên dữ liệu thật: ngưỡng 5 đã kéo vào cặp chỉ chung một chữ chung chung như "token", "log"
+RELATED_PER_KU = 3
+
+
+def _shares_scope(a: str, b: str) -> bool:
+    shared = ("tenant", "org")
+    return a == b or (a in shared and b in shared) or (a.startswith(("user:", "project:")) and b in shared) or (b.startswith(("user:", "project:")) and a in shared)
+
+
+def link_related(conn, tenant_id: str, ku_id: str) -> int:
+    """Nối KU với tối đa 3 KU cùng chủ đề: điểm = tổng IDF của thực thể chung + 2×cosine.
+
+    IDF để thực thể có mặt khắp nơi (tên cụm, môi trường) gần như không tính. Cạnh lưu src<dst vì truy xuất đi cả hai chiều.
+    Chỉ nối trong phạm vi nhìn thấy nhau, để ký ức cá nhân không kéo KU của người khác vào lượt.
+    """
+    ku = get(conn, tenant_id, ku_id)
+    if ku is None or not ku["entities"] or ku["status"] not in ("active", "candidate"):
+        return 0
+    rs = conn.execute("SELECT id, scope, entities, embedding FROM knowledge_unit WHERE tenant_id=? AND status IN ('active','candidate')", (tenant_id,)).fetchall()
+    df: dict[str, int] = {}
+    pool = []
+    for r in rs:
+        ents = set(json.loads(r["entities"]))
+        for e in ents:
+            df[e] = df.get(e, 0) + 1
+        if r["id"] != ku_id and _shares_scope(ku["scope"], r["scope"]):
+            pool.append((r["id"], ents, r["embedding"]))
+    linked = {x for e in conn.execute("SELECT src, dst FROM ku_edge WHERE tenant_id=? AND (src=? OR dst=?)", (tenant_id, ku_id, ku_id)) for x in (e["src"], e["dst"])}
+    mine, n = set(ku["entities"]), len(rs)
+    scored = []
+    for other, ents, vec in pool:
+        shared = mine & ents
+        if not shared or other in linked:
+            continue
+        score = sum(math.log(n / df[e]) for e in shared) + 2 * max(0.0, cosine(ku["embedding"], json.loads(vec)))
+        if score >= RELATED_MIN:
+            scored.append((score, other))
+    room = max(0, RELATED_PER_KU - len(linked - {ku_id}))
+    best = sorted(scored, reverse=True)[:room]
+    for _, other in best:
+        add_edge(conn, tenant_id, min(ku_id, other), max(ku_id, other), "related")
+    return len(best)
+
+
 def invalidate(conn, tenant_id: str, ku_id: str, superseded_by: str | None, actor: str, reason: str) -> dict:
     """Vô hiệu = đặt valid_to và superseded_by, không xóa."""
     return update(conn, tenant_id, ku_id, {"status": "deprecated", "valid_to": db.iso(), "superseded_by": superseded_by},
@@ -209,4 +254,5 @@ def merge(conn, tenant_id: str, ids: list[str], merged: dict, actor: str, activa
             add_edge(conn, tenant_id, new["id"], k["id"], "refines")
         if activate:
             new = promote(conn, tenant_id, new["id"], actor, "người duyệt chấp nhận bản gộp")
+        link_related(conn, tenant_id, new["id"])
     return new

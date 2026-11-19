@@ -81,11 +81,20 @@ def backlog(conn, tenant_id: str) -> dict:
     return {"candidates": r["n"], "oldest": r["oldest"], "new_per_day": round(week / 7, 1)}
 
 
+def link_missing(conn, tenant_id: str) -> int:
+    """KU chưa có cạnh liên quan nào (học trước khi có link_related, hoặc lúc thêm chưa có KU cùng chủ đề) thì thử nối lại."""
+    rs = conn.execute("SELECT id FROM knowledge_unit k WHERE tenant_id=? AND status IN ('active','candidate') AND entities!='[]' "
+                      "AND NOT EXISTS (SELECT 1 FROM ku_edge e WHERE e.tenant_id=k.tenant_id AND e.rel='related' AND (e.src=k.id OR e.dst=k.id))",
+                      (tenant_id,)).fetchall()
+    return sum(knowledge.link_related(conn, tenant_id, r["id"]) for r in rs)
+
+
 def run(conn, tenant_id: str, actor: str = "lint") -> dict:
     report = {
         "at": db.iso(),
         "stale_days": settings.lint_stale_days,
         "expired": expire_candidates(conn, tenant_id, settings.lint_stale_days, actor),
+        "linked": link_missing(conn, tenant_id),
         "entity_merges": entity_suggestions(conn, tenant_id),
         "unused": unused(conn, tenant_id),
         "unused_days": UNUSED_DAYS,
