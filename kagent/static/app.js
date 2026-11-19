@@ -1593,26 +1593,28 @@ function llmUsageChart(t) {
 
 function tokenSection(t) {
   if (!t) return null;
-  const wrote = (r) => r.cache_write_1h ? h("span", { title: "Phần ghi với TTL 1 giờ, giá ghi 2× input thay vì 1,25×" }, num(r.cache_write), h("span", { class: "small muted" }, ` (1h: ${num(r.cache_write_1h)})`)) : num(r.cache_write);
+  // Lời gọi trước khi có cột cache_write_1h có 1h = 0 nên cả phần ghi rơi vào cột 5 phút.
+  const w5 = (r) => num(r.cache_write - (r.cache_write_1h || 0)), w1 = (r) => num(r.cache_write_1h || 0);
+  const wHead = [h("th", { title: "Ghi cache TTL 5 phút: giá 1,25× input" }, "Cache ghi 5p"), h("th", { title: "Ghi cache TTL 1 giờ: giá 2× input. Dữ liệu trước 19/11 không tách được, nằm ở cột 5p" }, "Cache ghi 1h")];
   const all = t.by_purpose.reduce((a, r) => a + r.input + r.cache_read + r.cache_write + r.output, 0);
-  const table = (head, rows) => h("div", { class: "card scroll" }, h("table", {}, h("thead", {}, h("tr", {}, head.map((x) => h("th", {}, x)))), h("tbody", {}, rows)));
+  const table = (head, rows) => h("div", { class: "card scroll" }, h("table", {}, h("thead", {}, h("tr", {}, head.map((x) => typeof x === "string" ? h("th", {}, x) : x))), h("tbody", {}, rows)));
   return h("div", {},
     h("h2", { class: "row" }, `Token ${t.days} ngày qua`),
     h("div", { class: "grid" }, h("div", { class: "tile" }, h("b", {}, num(all)), h("span", { class: "small" }, "Tổng token xử lý")),
       h("div", { class: "tile" }, h("b", {}, t.cache_hit_pct === null ? "—" : t.cache_hit_pct + "%"), h("span", { class: "small" }, "Input đọc từ cache"),
         t.cache_unmeasured ? h("span", { class: "small muted", title: "Dịch vụ LLM không trả số token cache (vd. vLLM chưa bật --enable-prompt-tokens-details), nên không tính vào tỷ lệ" },
           `chưa tính ${num(t.cache_unmeasured)} token input từ LLM không báo cache`) : null)),
-    table(["Mục đích", "Lần gọi", "Input", "Cache đọc", "Cache ghi", "Output"], t.by_purpose.map((r) =>
-      h("tr", {}, h("td", {}, PURPOSE[r.purpose] || r.purpose), h("td", {}, num(r.calls)), h("td", {}, num(r.input)), h("td", {}, num(r.cache_read)), h("td", {}, wrote(r)), h("td", {}, num(r.output))))),
+    table(["Mục đích", "Lần gọi", "Input", "Cache đọc", ...wHead, "Output"], t.by_purpose.map((r) =>
+      h("tr", {}, h("td", {}, PURPOSE[r.purpose] || r.purpose), h("td", {}, num(r.calls)), h("td", {}, num(r.input)), h("td", {}, num(r.cache_read)), h("td", {}, w5(r)), h("td", {}, w1(r)), h("td", {}, num(r.output))))),
     knowledgeSection(t.knowledge),
     h("h2", { class: "row" }, "Token theo LLM, 14 ngày qua"),
     h("p", { class: "small" }, "Tổng token xử lý mỗi ngày (input, cache đọc/ghi, output), chia theo cấu hình LLM và model. Rê chuột lên cột để xem chi tiết."),
     llmUsageChart(t),
-    table(["LLM", "Lần gọi", "Input", "Cache đọc", "Cache ghi", "Cache hit", "Output", "Tổng"], (t.by_llm || []).map((r) => {
+    table(["LLM", "Lần gọi", "Input", "Cache đọc", ...wHead, "Cache hit", "Output", "Tổng"], (t.by_llm || []).map((r) => {
       const inp = r.input + r.cache_read + r.cache_write;
       const hit = r.cache_known === 0 ? h("span", { class: "muted", title: "Dịch vụ không trả số token cache" }, "không đo được")
         : inp ? Math.round(1000 * r.cache_read / inp) / 10 + "%" : "—";
-      return h("tr", {}, h("td", {}, r.label), h("td", {}, num(r.calls)), h("td", {}, num(r.input)), h("td", {}, num(r.cache_read)), h("td", {}, wrote(r)),
+      return h("tr", {}, h("td", {}, r.label), h("td", {}, num(r.calls)), h("td", {}, num(r.input)), h("td", {}, num(r.cache_read)), h("td", {}, w5(r)), h("td", {}, w1(r)),
         h("td", {}, hit), h("td", {}, num(r.output)), h("td", {}, num(r.total)));
     })),
     h("h2", { class: "row" }, "Công cụ trả kết quả lớn nhất"),
