@@ -26,6 +26,13 @@ function appendKids(el, kids) {
   }
 }
 
+// Thay toàn bộ con của el theo cùng quy tắc với h(); replaceChildren gốc biến `cond && …` thành chữ "false".
+function setKids(el, ...kids) {
+  el.replaceChildren();
+  appendKids(el, kids);
+  return el;
+}
+
 async function api(method, path, body) {
   const headers = {};
   if (state.tenant) headers["X-Tenant-Id"] = state.tenant.id;
@@ -75,7 +82,7 @@ function renderLogin() {
     await api("POST", "/api/auth/login", { username: user.value, password: pass.value });
     await boot();
   });
-  root.replaceChildren(h("form", { class: "card login", onsubmit: submit }, h("h2", {}, "Knowledge Agent"), h("p", { class: "muted" }, "Agent tự tích lũy tri thức"), user, pass, h("button", { type: "submit" }, "Đăng nhập")));
+  setKids(root, h("form", { class: "card login", onsubmit: submit }, h("h2", {}, "Knowledge Agent"), h("p", { class: "muted" }, "Agent tự tích lũy tri thức"), user, pass, h("button", { type: "submit" }, "Đăng nhập")));
   user.focus();
 }
 
@@ -159,7 +166,7 @@ function conversationItem(c) {
     const save = async () => { const title = input.value.trim(); if (title && title !== c.title) await api("PATCH", `/api/conversations/${c.id}`, { title }); refreshConversations(); };
     input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); if (e.key === "Escape") { input.value = c.title; input.blur(); } });
     input.addEventListener("blur", () => save().catch((e) => toast(e.message, true)));
-    item.replaceChildren(input);
+    setKids(item, input);
     input.select();
   });
   const remove = guard(async () => {
@@ -181,7 +188,7 @@ async function refreshConversations() {
   document.title = (waiting ? `(${waiting}) ` : "") + "Knowledge Agent";
   const groups = new Map();
   for (const c of list) { const g = dateGroup(c.updated_at); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(c); }
-  conversationList.replaceChildren(...(list.length ? [...groups].flatMap(([g, items]) => [h("div", { class: "group" }, g), ...items.map(conversationItem)]) : [h("div", { class: "small pad" }, "Chưa có hội thoại nào.")]));
+  setKids(conversationList, ...(list.length ? [...groups].flatMap(([g, items]) => [h("div", { class: "group" }, g), ...items.map(conversationItem)]) : [h("div", { class: "small pad" }, "Chưa có hội thoại nào.")]));
 }
 
 function renderShell() {
@@ -204,7 +211,7 @@ function renderShell() {
   const top = h("header", { class: "top" }, iconButton("menu", "Mở danh sách", () => { sidebar.classList.add("open"); scrim.classList.add("open"); }, "menu-btn"), h("span", { class: "top-title" }, title), h("span", { class: "spacer" }), h("span", { class: "badge info" }, "Model: " + model));
   const main = h("main", { class: state.tab === "chat" ? "chat" : "page" });
   main.append = (...kids) => appendKids(main, kids);
-  root.replaceChildren(h("div", { class: "layout" }, scrim, sidebar, h("div", { class: "content" }, top, main)));
+  setKids(root, h("div", { class: "layout" }, scrim, sidebar, h("div", { class: "content" }, top, main)));
   refreshConversations().catch((e) => toast(e.message, true));
   VIEWS[state.tab](main).catch((e) => toast(e.message, true));
 }
@@ -296,7 +303,7 @@ async function incidentList(main) {
           h("div", { class: "small" }, `${g.reason} · sự cố gốc mở ${hmd(g.into.created_at)}`)),
         h("button", { type: "button", class: "small-btn", onclick: guard(async () => { await api("POST", `/api/incidents/${g.from.id}/merge`, { into: g.into.id }); toast("Đã gộp"); await load(); }) }, "Gộp vào sự cố gốc"))));
     const empty = { attention: "Không có sự cố nào cần người xử lý.", open: "Không có sự cố đang mở." }[status] || "Không có sự cố.";
-    box.replaceChildren();
+    setKids(box);
     appendKids(box, [tabs, statusLine, suggest, data.items.length ? h("section", { class: "card ix-list", "aria-label": "Sự cố" }, data.items.map(row)) : h("div", { class: "card muted" }, empty)]);
     refreshLater(15000, token, load);
   }
@@ -458,11 +465,11 @@ async function incidentDetail(main, id) {
           h("div", { class: "ix-mark " + (EV_MARK[e.kind] || "") }, h("span", {})),
           h("div", { class: "ix-body" }, h("span", { class: "ix-who" }, e.who), e.title ? evBody(e) : h("span", { class: "ix-res" }, e.text))));
       }
-      tl.replaceChildren(...(kids.length ? kids : [h("li", { class: "small muted" }, "Chưa có sự kiện.")]));
+      setKids(tl, ...(kids.length ? kids : [h("li", { class: "small muted" }, "Chưa có sự kiện.")]));
     };
     paint();
     const filters = h("div", { class: "ix-filters", role: "group", "aria-label": "Lọc dòng sự kiện" });
-    const paintFilters = () => filters.replaceChildren(...EV_FILTERS.map(([k, label]) => h("button", { type: "button", class: "chip" + (filter === k ? " on" : ""),
+    const paintFilters = () => setKids(filters, ...EV_FILTERS.map(([k, label]) => h("button", { type: "button", class: "chip" + (filter === k ? " on" : ""),
       "aria-pressed": String(filter === k), onclick: () => { filter = k; paintFilters(); paint(); } }, label)));
     paintFilters();
     const events = h("section", { class: "card", "aria-labelledby": "ix-tl-h" }, h("div", { class: "ix-sec" }, h("h3", { id: "ix-tl-h" }, "Dòng sự kiện"), filters), tl);
@@ -508,7 +515,7 @@ async function incidentDetail(main, id) {
       rel.history.length > 0 && h("ul", { class: "small" }, rel.history.map((r) => h("li", {}, incLink(r), r.count > 1 ? ` · ${r.count} lần, ${dm(r.first)}–${dm(r.created_at)}` : ` · ${dm(r.created_at)}`))),
       !rel.open.length && !rel.history_count && h("p", { class: "small muted" }, `Không có sự cố cùng nhóm trong ${rel.days} ngày.`));
     const recap = d.summary && summaryCard(d.summary, id);
-    box.replaceChildren();
+    setKids(box);
     appendKids(box, [head, wait, h("div", { class: "ix-grid" }, h("div", { class: "ix-col" }, recap, events), h("aside", { class: "ix-col", "aria-label": "Thông tin sự cố" }, times, alerts, cause, related))]);
     if (!menuOpen && d.status === "open" && (busyNow || ["new", "awaiting_approval", "verifying"].includes(d.stage))) refreshLater(8000, token, load);
   }
@@ -563,7 +570,7 @@ VIEWS.chat = chatView;
 VIEWS.episodes = async (main) => {
   const list = await api("GET", "/api/episodes");
   const detail = h("div");
-  const open = (id) => guard(async () => { const ep = await api("GET", `/api/episodes/${id}`); detail.replaceChildren(episodeCard(ep, () => renderShell())); detail.scrollIntoView(); });
+  const open = (id) => guard(async () => { const ep = await api("GET", `/api/episodes/${id}`); setKids(detail, episodeCard(ep, () => renderShell())); detail.scrollIntoView(); });
   main.append(h("h2", {}, "Nhật ký (L0)"), h("div", { class: "card scroll" }, list.length === 0 ? "Chưa có episode." : h("table", {},
     h("thead", {}, h("tr", {}, ["Thời gian", "Nhiệm vụ", "Loại", "Môi trường", "Kết quả", "Người chạy", "Đã học"].map((x) => h("th", {}, x)))),
     h("tbody", {}, list.map((e) => h("tr", { class: "click", onclick: open(e.id) }, h("td", {}, fmtTime(e.started_at)), h("td", {}, e.input.task), h("td", {}, e.task_type), h("td", {}, e.env), h("td", {}, badge(e.outcome)), h("td", {}, e.user), h("td", {}, e.processed_at ? "rồi" : "chưa")))))), detail);
@@ -582,17 +589,17 @@ function lintCard(report, reload) {
   const run = guard(async () => { render(await api("POST", "/api/knowledge/lint")); toast("Đã kiểm tra kho tri thức"); await reload(); });
   const mergeEntity = (m, li) => guard(async () => {
     const r = await api("POST", "/api/knowledge/entities/merge", { sources: m.sources, target: m.target });
-    li.replaceChildren(h("span", { class: "small" }, `Đã gộp ${r.merged.join(", ")} → ${r.target} (${r.kus} KU)`));
+    setKids(li, h("span", { class: "small" }, `Đã gộp ${r.merged.join(", ")} → ${r.target} (${r.kus} KU)`));
   });
   const list = (items, line) => h("ul", { class: "small" }, items.map(line));
   function render(r) {
     if (!r) {
-      box.replaceChildren(h("div", { class: "row spread" }, h("b", {}, "Kiểm tra kho tri thức"), h("button", { type: "button", class: "ghost", onclick: run }, "Kiểm tra ngay")),
+      setKids(box, h("div", { class: "row spread" }, h("b", {}, "Kiểm tra kho tri thức"), h("button", { type: "button", class: "ghost", onclick: run }, "Kiểm tra ngay")),
         h("div", { class: "small muted" }, "Chưa chạy lần nào. Vòng nền tự chạy mỗi ngày một lần."));
       return;
     }
     const b = r.backlog;
-    box.replaceChildren(
+    setKids(box, 
       h("div", { class: "row spread" }, h("b", {}, "Kiểm tra kho tri thức"), h("span", { class: "small muted" }, `lần gần nhất ${fmtTime(r.at)}`),
         h("button", { type: "button", class: "ghost", onclick: run }, "Kiểm tra ngay")),
       h("div", { class: "small" }, `${b.candidates} ứng viên chờ duyệt${b.oldest ? `, cũ nhất từ ${fmtTime(b.oldest)}` : ""}; khoảng ${b.new_per_day} KU mới mỗi ngày.` +
@@ -630,7 +637,7 @@ function mergeProposalsCard(reload) {
     const el = h("div", { class: "card" });
     const decide = (approve) => guard(async () => {
       await api("POST", `/api/knowledge/merge-proposals/${p.id}/decide`, approve ? { approve, title: t.value, content: c.value, applies_when: a.value } : { approve });
-      el.replaceChildren(h("div", { class: "small" }, approve ? `Đã gộp ${p.members.length} KU thành "${t.value}".` : "Đã bỏ qua; nhóm này sẽ không được đề xuất lại."));
+      setKids(el, h("div", { class: "small" }, approve ? `Đã gộp ${p.members.length} KU thành "${t.value}".` : "Đã bỏ qua; nhóm này sẽ không được đề xuất lại."));
       await reload();
     });
     el.append(h("div", { class: "row spread" }, h("b", {}, `Gộp ${p.members.length} KU về ${p.entity || "cùng chủ đề"}`), h("span", { class: "badge info" }, p.kind)),
@@ -642,7 +649,7 @@ function mergeProposalsCard(reload) {
   };
   async function poll() {
     const r = await api("GET", "/api/knowledge/merge-proposals");
-    box.replaceChildren(h("div", { class: "row spread" }, h("h3", {}, `Đề xuất gộp KU (${r.proposals.length})`),
+    setKids(box, h("div", { class: "row spread" }, h("h3", {}, `Đề xuất gộp KU (${r.proposals.length})`),
         r.running ? busy("đang tìm KU trùng…") : h("button", { type: "button", class: "ghost", onclick: findDups, title: "Xét từng trang thực thể; cụm không đổi từ lần trước được bỏ qua" }, "Tìm KU trùng ngay")),
       ...(r.proposals.length ? r.proposals.map(card) : [h("div", { class: "card muted small" }, "Không có đề xuất gộp. Vòng nền tìm mỗi ngày; ứng viên nói đúng điều một KU đã có được tự gộp, không cần duyệt.")]));
     if (r.running) setTimeout(() => { if (document.contains(box)) poll().then(reload).catch(() => {}); }, 4000);
@@ -663,7 +670,7 @@ async function knowledgeUnitsView(main) {
   let current = [];
   const showKu = (id) => guard(async () => {
     const ku = await api("GET", `/api/ku/${id}`);
-    detail.replaceChildren(h("div", { class: "card" }, h("h3", {}, "Lịch sử: " + ku.title),
+    setKids(detail, h("div", { class: "card" }, h("h3", {}, "Lịch sử: " + ku.title),
       h("div", { class: "small" }, `Nguồn: ${ku.source_trust} · phiên bản ${ku.version} · `, ...kuSources(ku.sources)),
       h("table", {}, h("tbody", {}, ku.events.map((ev) => h("tr", {}, h("td", {}, fmtTime(ev.at)), h("td", {}, ev.op), h("td", {}, ev.actor), h("td", {}, ev.reason || ""),
         h("td", {}, isAdmin() && h("button", { class: "ghost", onclick: guard(async () => { await api("POST", `/api/ku/events/${ev.id}/rollback`); toast("Đã hoàn tác"); await load(); }) }, "Hoàn tác"))))))));
@@ -693,17 +700,17 @@ async function knowledgeUnitsView(main) {
   async function follow(job) {
     store.set("ku:consolidate", job.id);
     const progress = h("div", { class: "card muted" });
-    consolidated.replaceChildren(progress);
+    setKids(consolidated, progress);
     let offline = false;
     while (job.status === "running") {
-      progress.replaceChildren(busy(`Đang tổng hợp ${job.considered} ứng viên: xong ${job.done}/${job.total} lô…` +
+      setKids(progress, busy(`Đang tổng hợp ${job.considered} ứng viên: xong ${job.done}/${job.total} lô…` +
         (offline ? " (mất kết nối tới máy chủ, đang thử lại)" : " (có thể mất vài phút; chuyển màn hay tải lại trang vẫn theo dõi tiếp)")));
       await new Promise((r) => setTimeout(r, 3000));
       if (!document.contains(progress)) return;  // người dùng đã rời trang hoặc đóng đề xuất; quay lại thì resume() theo dõi tiếp
       try { job = await api("GET", `/api/ku/consolidate/${job.id}`); offline = false; }
       catch (e) { if (e.status === 404) throw e; offline = true; }  // server khởi động lại hay mạng chập chờn: job vẫn còn, thử lại
     }
-    if (job.status === "error") { store.set("ku:consolidate", null); consolidated.replaceChildren(); throw new Error("Không tổng hợp được: " + job.errors.join("; ")); }
+    if (job.status === "error") { store.set("ku:consolidate", null); setKids(consolidated); throw new Error("Không tổng hợp được: " + job.errors.join("; ")); }
     renderProposal(job);
     if (job.errors.length) toast(`${job.errors.length} lô bị lỗi: ${job.errors[0]}`, true);
   }
@@ -714,7 +721,7 @@ async function knowledgeUnitsView(main) {
     catch (e) {
       if (e.status !== 404) return toast(e.message, true);  // lỗi tạm thời: giữ job, lần mở lại màn sẽ thử tiếp
       store.set("ku:consolidate", null);  // job không còn (đã có lần tổng hợp mới hơn)
-      consolidated.replaceChildren();
+      setKids(consolidated);
     }
   }
   // Tên nút cho biết phạm vi sẽ xét, để không nhầm chỉ tổng hợp một loại khi bộ lọc đang bật.
@@ -738,7 +745,7 @@ async function knowledgeUnitsView(main) {
       const apply = async (activate) => {
         await api("POST", "/api/ku/merge", { ids: g.ids, kind: g.kind, title: t.value, content: c.value, applies_when: a.value || null, activate });
         card.classList.remove("merge-card");
-        card.replaceChildren(h("div", { class: "small" }, `Đã gộp ${g.ids.length} KU thành "${t.value}"${activate ? " và chấp nhận" : " (vẫn là ứng viên)"}.`));
+        setKids(card, h("div", { class: "small" }, `Đã gộp ${g.ids.length} KU thành "${t.value}"${activate ? " và chấp nhận" : " (vẫn là ứng viên)"}.`));
       };
       card.applyMerge = apply;  // dùng cho nút "Gộp và chấp nhận tất cả", giữ nội dung người dùng đã sửa
       const merge = (activate) => guard(async () => { await apply(activate); await load(); });
@@ -754,7 +761,7 @@ async function knowledgeUnitsView(main) {
       h("ul", { class: "small" }, p.drop.map((d) => h("li", {}, h("label", {}, h("input", { type: "checkbox", checked: true, onchange: (e) => (e.target.checked ? dropIds.add(d.id) : dropIds.delete(d.id)) }), " ", title(d.id), h("span", { class: "muted" }, " — " + d.reason))))),
       h("div", { class: "row" }, h("button", { type: "button", class: "danger", onclick: guard(async (e) => {
         const r = await batch(dropIds, false);
-        e.target.closest(".card").replaceChildren(h("div", { class: "small" }, `Đã loại ${r.done} KU.`));
+        setKids(e.target.closest(".card"), h("div", { class: "small" }, `Đã loại ${r.done} KU.`));
         await load();
       }) }, "Loại các mục đã chọn")));
     const mergedCount = p.groups.reduce((n, g) => n + g.ids.length, 0);
@@ -768,11 +775,11 @@ async function knowledgeUnitsView(main) {
     });
     const acceptSingles = guard(async (e) => {
       const r = await batch(p.singles, true);
-      e.target.closest(".card").replaceChildren(h("div", { class: "small" }, `Đã chấp nhận ${r.done} ứng viên không trùng.`));
+      setKids(e.target.closest(".card"), h("div", { class: "small" }, `Đã chấp nhận ${r.done} ứng viên không trùng.`));
       await load();
     });
     const scope = p.kind ? `chỉ loại ${p.kind}` : "mọi loại";
-    consolidated.replaceChildren(h("h3", {}, `Đề xuất tổng hợp (${scope}, đã xét ${p.considered} ứng viên)`),
+    setKids(consolidated, h("h3", {}, `Đề xuất tổng hợp (${scope}, đã xét ${p.considered} ứng viên)`),
       p.groups.length > 0 && h("div", { class: "card row" }, h("span", { class: "small" }, `${p.groups.length} nhóm gộp ${mergedCount} KU thành ${p.groups.length}; ${p.drop.length} KU đề xuất loại. Sửa hoặc bỏ qua nhóm chưa ổn rồi chấp nhận phần còn lại.`),
         h("span", { class: "spacer" }), h("button", { type: "button", onclick: acceptAll }, `Gộp và chấp nhận tất cả ${p.groups.length} nhóm`)),
       p.singles && p.singles.length > 0 && h("div", { class: "card row" },
@@ -780,7 +787,7 @@ async function knowledgeUnitsView(main) {
         h("span", { class: "spacer" }), h("button", { type: "button", class: "ghost", onclick: acceptSingles }, `Chấp nhận ${p.singles.length} ứng viên không trùng`)),
       p.outside > 0 && h("div", { class: "card small muted" }, `Còn ${p.outside} ứng viên ngoài phạm vi đề xuất này (${p.kind ? "loại khác hoặc " : ""}mới sinh sau khi tổng hợp). Chọn "Mọi loại" rồi tổng hợp lại để xét cả những mục đó.`),
       ...(p.groups.length || p.drop.length ? [...p.groups.map(groupCard), dropCard] : [h("div", { class: "card muted" }, "Không thấy KU trùng ý hay ít giá trị.")]),
-      h("div", { class: "row" }, h("button", { type: "button", class: "ghost", onclick: () => { store.set("ku:consolidate", null); consolidated.replaceChildren(); } }, "Đóng đề xuất")));
+      h("div", { class: "row" }, h("button", { type: "button", class: "ghost", onclick: () => { store.set("ku:consolidate", null); setKids(consolidated); } }, "Đóng đề xuất")));
   }
 
   async function load() {
@@ -791,7 +798,7 @@ async function knowledgeUnitsView(main) {
     selected.clear();
     selectAll.checked = false;
     const picking = isAdmin() && statusSel.value === "candidate";
-    box.replaceChildren(...(current.length ? current.map((k) => h("div", { class: "card" },
+    setKids(box, ...(current.length ? current.map((k) => h("div", { class: "card" },
       h("div", { class: "row spread" }, h("div", { class: "row" }, picking && h("input", { type: "checkbox", class: "ku-pick", "aria-label": "Chọn " + k.title,
         onchange: (e) => { e.target.checked ? selected.add(k.id) : selected.delete(k.id); syncBulk(); } }), h("h3", {}, k.title)),
         h("div", {}, badge(k.status), h("span", { class: "badge info" }, k.kind), h("span", { class: "badge" }, k.source_trust), h("span", { class: "badge" }, k.domain))),
@@ -931,7 +938,7 @@ function toolCatalogSection() {
     const shown = list.filter((t) => match(t) && (!q || t.tool.includes(q) || t.description.toLowerCase().includes(q)));
     const groups = new Map();
     for (const t of shown) { if (!groups.has(t.server)) groups.set(t.server, []); groups.get(t.server).push(t); }
-    box.replaceChildren(
+    setKids(box, 
       ...(shown.length ? [...groups].map(([server, items]) => h("div", { class: "card" }, h("h3", {}, server, " ", h("span", { class: "small" }, items[0].server_description)), items.map(item)))
         : [h("div", { class: "card muted" }, list.length ? "Không có công cụ phù hợp." : "Chưa có công cụ nào. Tạo kết nối ở trang Kết nối công cụ.")]));
   }
@@ -964,14 +971,14 @@ function connectionForm(templates, existing, onDone) {
   const flip = (arr, v) => (arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
   function paintChips() {
     const chip = (label, on, onclick) => h("button", { type: "button", class: "chip" + (on ? " on" : ""), "aria-pressed": on ? "true" : "false", onclick }, label);
-    chips.replaceChildren(h("span", { class: "small" }, "Môi trường"), ...["dev", "staging", "prod"].map((e) => chip(e, envs.includes(e), () => { envs = flip(envs, e); store.set(`${draft}:envs`, envs); paintChips(); })),
+    setKids(chips, h("span", { class: "small" }, "Môi trường"), ...["dev", "staging", "prod"].map((e) => chip(e, envs.includes(e), () => { envs = flip(envs, e); store.set(`${draft}:envs`, envs); paintChips(); })),
       ...(scope.value === "tenant" ? [h("span", { class: "small sep" }, "Vai trò được dùng"), ...Object.keys(ROLE_LABEL).map((r) => chip(ROLE_LABEL[r], roles.includes(r), () => { roles = flip(roles, r); store.set(`${draft}:roles`, roles); paintChips(); }))] : []));
   }
   function paintFields() {
     const tpl = templates.find((t) => t.name === tplSelect.value);
     desc.textContent = tpl.description + " Công cụ: " + tpl.tools.map((t) => `${t.name} (${t.risk_tier})`).join(", ") + ".";
     for (const k of Object.keys(inputs)) delete inputs[k];
-    fieldsBox.replaceChildren(...tpl.fields.map((f) => {
+    setKids(fieldsBox, ...tpl.fields.map((f) => {
       const current = existing ? existing.params[f.name] : undefined;
       let input;
       if (f.type === "boolean") input = h("input", { type: "checkbox", checked: current !== undefined ? current : f.default === true });
@@ -1062,7 +1069,7 @@ function k8sRbacPanel(c) {
   function paintPlan(r, applied) {
     const cls = { create: "ok", update: "warn", delete: "bad", unchanged: "" };
     const label = { create: "tạo", update: "sửa", delete: "xóa", unchanged: "giữ nguyên" };
-    result.replaceChildren(h("div", { class: "card" },
+    setKids(result, h("div", { class: "card" },
       h("strong", {}, applied ? `Đã áp dụng (${r.changes} thay đổi)` : r.changes ? `Sẽ có ${r.changes} thay đổi trong cụm` : "Cụm đã khớp với cấu hình"),
       r.errors.length ? h("ul", { class: "warn-text small" }, r.errors.map((e) => h("li", {}, e))) : null,
       r.warnings.length ? h("ul", { class: "small" }, r.warnings.map((w) => h("li", {}, "⚠ " + w))) : null,
@@ -1074,13 +1081,13 @@ function k8sRbacPanel(c) {
   function paint() {
     const ids = RBAC_GROUPS.map(([p, name]) => h("span", { class: "badge " + (info.identities[p] ? "ok" : "") }, `${name}: ${info.identities[p] ? "đã có SA" : "chưa có"}`));
     const preview = guard(async () => {
-      result.replaceChildren(busy("Đang so sánh với cụm và chạy thử…"));
-      try { paintPlan(await api("POST", `/api/connections/${c.id}/k8s-rbac/plan`, { config: cfg }), false); } catch (e) { result.replaceChildren(); throw e; }
+      setKids(result, busy("Đang so sánh với cụm và chạy thử…"));
+      try { paintPlan(await api("POST", `/api/connections/${c.id}/k8s-rbac/plan`, { config: cfg }), false); } catch (e) { setKids(result); throw e; }
     });
     const apply = guard(async () => {
-      result.replaceChildren(busy("Đang áp dụng vào cụm…"));
+      setKids(result, busy("Đang áp dụng vào cụm…"));
       let r;
-      try { r = await api("POST", `/api/connections/${c.id}/k8s-rbac/apply`, { config: cfg }); } catch (e) { result.replaceChildren(); throw e; }
+      try { r = await api("POST", `/api/connections/${c.id}/k8s-rbac/apply`, { config: cfg }); } catch (e) { setKids(result); throw e; }
       store.set(draftKey, null);
       toast("Đã áp dụng quyền Kubernetes. Bật các công cụ kubectl_* ở trang Danh mục & quyền nếu cần.");
       await load();
@@ -1091,12 +1098,12 @@ function k8sRbacPanel(c) {
       const r = await api("DELETE", `/api/connections/${c.id}/k8s-rbac`);
       store.set(draftKey, null);
       toast(`Đã gỡ ${r.removed} object khỏi cụm`);
-      result.replaceChildren();
+      setKids(result);
       await load();
     }) }, "Gỡ khỏi cụm");
     const saNs = h("input", { value: cfg.sa_namespace, disabled: !info.can_manage, "aria-label": "Namespace chứa ServiceAccount",
       oninput: (e) => { cfg.sa_namespace = e.target.value.trim(); save(); } });
-    box.replaceChildren();
+    setKids(box);
     appendKids(box, [
       h("p", { class: "small" }, info.applied ? `Đã áp dụng ${fmtTime(info.applied_at)}. ` : "Chưa áp dụng: công cụ kubectl_* chưa chạy được, các công cụ cũ đang dùng tài khoản của kết nối. ",
         "Mỗi nhóm có quy tắc thì được một ServiceAccount riêng, tên ", h("code", {}, info.base_name + "-<nhóm>"), ", nhãn ", h("code", {}, info.label),
@@ -1109,11 +1116,11 @@ function k8sRbacPanel(c) {
             cfg.profiles[p].push({ namespaces: [c.params.namespace || "default"], api_groups: [""], resources: [], verbs: verbs.slice(0, 3) }); save(); paint(); } }, "+ Thêm quy tắc")),
         cfg.profiles[p].length ? cfg.profiles[p].map((rule, i) => ruleRow(p, verbs, rule, i)) : h("div", { class: "small muted" }, "Chưa có quy tắc: nhóm này không có ServiceAccount."))),
       info.can_manage && h("div", { class: "row" }, h("button", { type: "button", onclick: preview }, "Xem trước"), h("button", { type: "button", onclick: apply }, "Áp dụng"),
-        h("button", { type: "button", class: "ghost", onclick: () => { store.set(draftKey, null); cfg = JSON.parse(JSON.stringify(info.config)); result.replaceChildren(); paint(); } }, "Bỏ thay đổi"),
+        h("button", { type: "button", class: "ghost", onclick: () => { store.set(draftKey, null); cfg = JSON.parse(JSON.stringify(info.config)); setKids(result); paint(); } }, "Bỏ thay đổi"),
         info.applied && remove),
       result]);
   }
-  load().catch((e) => box.replaceChildren(h("div", { class: "warn-text small" }, e.message)));
+  load().catch((e) => setKids(box, h("div", { class: "warn-text small" }, e.message)));
   return box;
 }
 
@@ -1126,9 +1133,9 @@ async function connectionsView(main) {
     const result = h("div", { class: "small" });
     const test = guard(async () => {
       result.className = "small";
-      result.replaceChildren(busy("Đang kiểm tra…"));
+      setKids(result, busy("Đang kiểm tra…"));
       let r;
-      try { r = await api("POST", `/api/connections/${c.id}/test`); } catch (e) { result.replaceChildren(); throw e; }  // không để spinner quay mãi khi request lỗi
+      try { r = await api("POST", `/api/connections/${c.id}/test`); } catch (e) { setKids(result); throw e; }  // không để spinner quay mãi khi request lỗi
       result.className = "small " + (r.ok ? "ok-text" : "warn-text");
       result.textContent = (r.ok ? "Kết nối được: " + JSON.stringify(r.detail) : "Lỗi: " + r.error) + (r.route ? ` · đường đi: ${r.route}` : "");
     });
@@ -1137,7 +1144,7 @@ async function connectionsView(main) {
     const toggleRbac = () => {
       const open = !rbacBox.childElementCount;
       store.set(rbacOpen, open);
-      rbacBox.replaceChildren(...(open ? [k8sRbacPanel(c)] : []));
+      setKids(rbacBox, ...(open ? [k8sRbacPanel(c)] : []));
     };
     if (c.template === "k8s" && store.get(rbacOpen, false)) rbacBox.append(k8sRbacPanel(c));
     const remove = h("button", { type: "button", class: "danger small-btn", onclick: () => {
@@ -1157,7 +1164,7 @@ async function connectionsView(main) {
       result, rbacBox);
   }
   const closeEditor = () => { store.set("conn:editing", null); reload(); };
-  function openEditor(c) { store.set("conn:editing", c.id); editor.replaceChildren(connectionForm(templates, c, closeEditor)); }
+  function openEditor(c) { store.set("conn:editing", c.id); setKids(editor, connectionForm(templates, c, closeEditor)); }
   const shared = list.filter((c) => !c.personal), mine = list.filter((c) => c.personal);
   const reopen = list.find((c) => c.id === store.get("conn:editing", null) && c.can_manage);
   if (reopen) openEditor(reopen);
@@ -1173,7 +1180,7 @@ function learnedToolsSection(personalOnly) {
   const tierClass = (r) => ({ R3: "warn", R4: "bad" }[r] || "");
   const load = async () => {
     const list = (await api("GET", "/api/learned-tools")).filter((t) => (personalOnly ? t.personal : !t.personal));
-    box.replaceChildren(...(list.length ? list.map(item) : [h("div", { class: "card muted" }, personalOnly
+    setKids(box, ...(list.length ? list.map(item) : [h("div", { class: "card muted" }, personalOnly
       ? "Bạn chưa có công cụ riêng. Trong chat, bấm biểu tượng lưu dưới một câu trả lời có chạy công cụ để tạo."
       : "Chưa có công cụ học được. Hệ thống tự đề xuất khi một chuỗi thao tác giống nhau thành công từ 3 lần.")]));
   };
@@ -1529,7 +1536,7 @@ async function knowledgeGraphView(main) {
   const setEntity = (e) => { entity = e; store.set("kg:entity", e); if (e) { q.value = ""; store.set("kg:q", null); } load(); };
 
   function showKu(k) {
-    detail.replaceChildren(h("div", { class: "row" }, h("span", { class: `badge sw-badge ${KIND_CLASS[k.kind]}` }, KIND_LABEL[k.kind] || k.kind), badge(k.status),
+    setKids(detail, h("div", { class: "row" }, h("span", { class: `badge sw-badge ${KIND_CLASS[k.kind]}` }, KIND_LABEL[k.kind] || k.kind), badge(k.status),
       k.score !== undefined && h("span", { class: "badge info" }, `điểm ${k.score}`)),
       h("h3", {}, k.title), h("div", {}, k.content), k.applies_when && h("div", { class: "small" }, "Áp dụng: " + k.applies_when),
       h("div", { class: "small muted" }, `${k.source_trust} · ✓${k.helpful_cnt} ✗${k.harmful_cnt} · ${k.domain}`),
@@ -1546,7 +1553,7 @@ async function knowledgeGraphView(main) {
       toast(`Đã gộp ${r.merged.join(", ")} vào ${r.target} (${r.kus} tri thức)`);
       setEntity(r.target);
     });
-    detail.replaceChildren(h("div", { class: "row" }, h("span", { class: "badge" }, name.startsWith("tool:") ? "công cụ" : "thực thể"), h("span", { class: "small muted" }, `${n} tri thức`)),
+    setKids(detail, h("div", { class: "row" }, h("span", { class: "badge" }, name.startsWith("tool:") ? "công cụ" : "thực thể"), h("span", { class: "small muted" }, `${n} tri thức`)),
       h("h3", {}, name),
       isAdmin() && !name.startsWith("tool:") && h("div", {},
         similar.length > 0 && h("div", { class: "small" }, "Tên có vẻ cùng một thứ:"),
@@ -1568,9 +1575,9 @@ async function knowledgeGraphView(main) {
       r: k.score !== undefined ? 8 + Math.min(7, k.score * 10) : 8 + Math.min(6, Math.sqrt(k.helpful_cnt || 0) * 1.8) }))];
     const links = [...data.nodes.flatMap((k) => k.entities.filter((e) => entSet.has(e)).map((e) => ({ source: k.id, target: "e:" + e, rel: "entity" }))),
       ...data.edges.map((e) => ({ source: e.src, target: e.dst, rel: e.rel }))];
-    if (!data.nodes.length) return graphBox.replaceChildren(h("div", { class: "muted" }, "Không có tri thức nào khớp."));
+    if (!data.nodes.length) return setKids(graphBox, h("div", { class: "muted" }, "Không có tri thức nào khớp."));
     forceLayout(nodes, links, W, H);
-    graphBox.replaceChildren(h("div", { class: "chart-legend" }, Object.entries(KIND_LABEL).map(([k, l]) => h("span", {}, h("span", { class: `sw ${KIND_CLASS[k]}` }), l)),
+    setKids(graphBox, h("div", { class: "chart-legend" }, Object.entries(KIND_LABEL).map(([k, l]) => h("span", {}, h("span", { class: `sw ${KIND_CLASS[k]}` }), l)),
       h("span", {}, h("span", { class: "sw ent-sw" }), "thực thể"), h("span", { class: "small muted" }, "nét đứt: gộp từ · nét màu: cùng chủ đề · đỏ: mâu thuẫn · viền rỗng: ứng viên · phóng to để xem tên")),
       graphCanvas({ nodes, links, W, H, onKu: showKu, onEntity: (e) => (e === entity ? showEntity(e) : setEntity(e)), selected: entity ? "e:" + entity : null }));
   }
@@ -1579,13 +1586,13 @@ async function knowledgeGraphView(main) {
     const params = new URLSearchParams({ q: q.value.trim(), entity: entity || "", include_candidates: withCandidates.checked ? "true" : "false" });
     const data = await api("GET", "/api/knowledge/graph?" + params);
     allEntities = data.entities;
-    chips.replaceChildren(h("span", { class: "small" }, "Thực thể:"), ...data.entities.slice(0, 24).map((e) =>
+    setKids(chips, h("span", { class: "small" }, "Thực thể:"), ...data.entities.slice(0, 24).map((e) =>
       h("button", { type: "button", class: "chip" + (e.entity === entity ? " on" : ""), onclick: () => setEntity(e.entity === entity ? "" : e.entity) }, `${e.entity} (${e.n})`)));
     draw(data);
-    if (entity) showEntity(entity); else detail.replaceChildren(hint());
+    if (entity) showEntity(entity); else setKids(detail, hint());
     const title = q.value.trim() ? `Agent sẽ nạp ${data.nodes.length} tri thức cho câu hỏi này (xếp theo điểm truy xuất)`
       : entity ? `${data.nodes.length} tri thức về ${entity}` : `${data.nodes.length} tri thức${withCandidates.checked ? " (gồm ứng viên)" : " đang hiệu lực"}`;
-    list.replaceChildren(h("h3", {}, title), ...data.nodes.slice(0, 50).map((k) => h("div", { class: "card kg-item", onclick: () => showKu(k) },
+    setKids(list, h("h3", {}, title), ...data.nodes.slice(0, 50).map((k) => h("div", { class: "card kg-item", onclick: () => showKu(k) },
       h("div", { class: "row" }, h("span", { class: `badge sw-badge ${KIND_CLASS[k.kind]}` }, KIND_LABEL[k.kind] || k.kind), k.status !== "active" && badge(k.status),
         k.score !== undefined && h("span", { class: "small muted" }, `điểm ${k.score}`), h("b", {}, k.title)),
       h("div", { class: "small" }, k.content))));
@@ -1621,7 +1628,7 @@ async function knowledgeSourcesView(main) {
     const d = await api("GET", `/api/knowledge/sources/${id}`);
     const bySection = new Map();
     for (const ku of d.kus) for (const n of ku.sections) bySection.set(n, [...(bySection.get(n) || []), ku]);
-    detail.replaceChildren(h("div", { class: "card" }, h("div", { class: "row spread" }, h("h3", {}, d.title), h("span", {}, badge(d.status))),
+    setKids(detail, h("div", { class: "card" }, h("div", { class: "row spread" }, h("h3", {}, d.title), h("span", {}, badge(d.status))),
       h("div", { class: "small" }, `${SOURCE_KIND[d.kind] || d.kind} · nguồn ${d.trust} · ${num(d.chars)} ký tự · ${d.chunks.length} đoạn · ${d.kus.length} KU`),
       d.result && d.result.errors && d.result.errors.length > 0 && h("div", { class: "small warn" }, d.result.errors.join("; ")),
       ...d.chunks.map((c, i) => h("details", {}, h("summary", {}, `${i + 1}. ${c.section} `, h("span", { class: "small muted" }, `${(bySection.get(i + 1) || []).length} KU`)),
@@ -1630,7 +1637,7 @@ async function knowledgeSourcesView(main) {
   });
   async function load() {
     const docs = await api("GET", "/api/knowledge/sources");
-    list.replaceChildren(docs.length ? h("div", { class: "card scroll" }, h("table", {},
+    setKids(list, docs.length ? h("div", { class: "card scroll" }, h("table", {},
       h("thead", {}, h("tr", {}, ["Thời gian", "Tiêu đề", "Loại", "Trạng thái", "Đoạn", "KU", "Người tải"].map((x) => h("th", {}, x)))),
       h("tbody", {}, docs.map((d) => h("tr", { class: "click", onclick: showDoc(d.id) }, h("td", {}, fmtTime(d.created_at)), h("td", {}, d.title),
         h("td", {}, SOURCE_KIND[d.kind] || d.kind), h("td", {}, d.status === "running" || d.status === "pending" ? busy("đang đọc") : badge(d.status)),
@@ -1692,7 +1699,7 @@ function llmUsageChart(t) {
   const show = (i, ev) => {
     const d = t.llm_days[i];
     const rows = series.filter((s) => byDay[d][s.label]).map((s) => h("div", { class: "row-tip" }, h("span", {}, h("span", { class: `sw ${s.cls}` }), s.label), h("span", {}, num(byDay[d][s.label]))));
-    tip.replaceChildren(h("div", { class: "row-tip" }, h("b", {}, d.split("-").reverse().join("/")), h("b", {}, num(totals[i]) + " token")), ...(rows.length ? rows : [h("div", { class: "small" }, "Không có lần gọi nào")]));
+    setKids(tip, h("div", { class: "row-tip" }, h("b", {}, d.split("-").reverse().join("/")), h("b", {}, num(totals[i]) + " token")), ...(rows.length ? rows : [h("div", { class: "small" }, "Không có lần gọi nào")]));
     tip.classList.remove("hidden");
     const box = wrap.getBoundingClientRect();
     const x = ev.clientX - box.left;
@@ -1853,9 +1860,9 @@ async function proxySettingsView(main) {
   const save = guard(async () => { st = await api("PUT", "/api/settings/proxy", { url: url.value.trim() || null }); paintStatus(); toast("Đã lưu URL file PAC"); });
   const reload = guard(async () => { st = await api("POST", "/api/settings/proxy/reload"); paintStatus(); });
   const test = guard(async () => {
-    testOut.className = "small"; testOut.replaceChildren(busy("Đang tra…"));
+    testOut.className = "small"; setKids(testOut, busy("Đang tra…"));
     try { const r = await api("POST", "/api/settings/proxy/test", { url: testUrl.value.trim() }); testOut.className = "small ok-text"; testOut.textContent = `${r.url}: ${r.text}`; }
-    catch (e) { testOut.replaceChildren(); throw e; }
+    catch (e) { setKids(testOut); throw e; }
   });
   paintStatus();
   main.append(h("div", { class: "card" }, h("h3", {}, "Proxy tự động (PAC)"),
@@ -1921,7 +1928,7 @@ async function llmSettingsView(main) {
   });
   const fetchModels = guard(async () => {
     const r = await api("POST", "/api/settings/llm-models", { ...endpoint(), key: key.value, profile_id: editing ? editing.id : null });
-    modelList.replaceChildren(...r.models.map((m) => h("option", { value: m.id }, m.name !== m.id ? m.name : null)));
+    setKids(modelList, ...r.models.map((m) => h("option", { value: m.id }, m.name !== m.id ? m.name : null)));
     modelInfo.textContent = r.models.length ? `Có ${r.models.length} model; bấm vào ô model để chọn.` : "Endpoint không trả về model nào.";
     toast(`Đã lấy ${r.models.length} model`);
   });
@@ -1979,7 +1986,7 @@ VIEWS.account = async (main) => {
 
 async function boot() {
   try { state.me = await api("GET", "/api/me"); } catch { return renderLogin(); }
-  if (!state.me.tenants.length) { root.replaceChildren(h("div", { class: "card login" }, "Tài khoản chưa thuộc tenant nào.")); return; }
+  if (!state.me.tenants.length) { setKids(root, h("div", { class: "card login" }, "Tài khoản chưa thuộc tenant nào.")); return; }
   state.tenant = state.tenant || state.me.tenants[0];
   applyHash();
   state.env = store.get("env", (state.me.profile && state.me.profile.default_env) || "dev");

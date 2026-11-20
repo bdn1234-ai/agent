@@ -35,8 +35,8 @@ const iconButton = (name, label, onclick, extra) => h("button", { type: "button"
 async function copyText(text, btn) {
   try { await navigator.clipboard.writeText(text); } catch { toast("Trình duyệt không cho sao chép", true); return; }
   if (!btn) return;
-  btn.replaceChildren(icon("check"));
-  setTimeout(() => btn.replaceChildren(icon("copy")), 1500);
+  setKids(btn, icon("check"));
+  setTimeout(() => setKids(btn, icon("copy")), 1500);
 }
 
 const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(\*[^*\s][^*\n]*\*)|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>)]+)/g;
@@ -232,7 +232,7 @@ function summaryCard(s, incidentId) {
     cur = next || {};
     const meta = cur.running ? "đang viết lại…" : cur.at ? `cập nhật ${fmtTime(cur.at)}` + (cur.stale ? " · có hoạt động mới, sẽ viết lại khi sự cố yên" : "")
       : "sẽ tự viết khi sự cố yên sau lượt điều tra";
-    card.replaceChildren(
+    setKids(card, 
       h("div", { class: "tool-head" }, h("strong", {}, "Tóm tắt sự cố"), h("span", { class: "small muted" }, meta), h("span", { class: "spacer" }),
         h("button", { type: "button", class: "ghost small-btn", onclick: guard(async (e) => {
           const btn = e.currentTarget;
@@ -311,7 +311,7 @@ function changeLine(change) {
   let cur = change;
   const paint = () => {
     const c = cur;
-    if (c.status === "loading") { box.replaceChildren(h("span", { class: "small muted" }, "…")); return; }
+    if (c.status === "loading") { setKids(box, h("span", { class: "small muted" }, "…")); return; }
     const check = c.check || {};
     const left = c.verify_until ? Math.max(0, Math.ceil((new Date(c.verify_until) - Date.now()) / 60000)) : 0;
     const by = c.reverted_by === "auto" ? "tự hoàn tác" : c.reverted_by === "drill" ? "hoàn tác khi diễn tập" : `${c.reverted_by || ""} hoàn tác`;
@@ -328,7 +328,7 @@ function changeLine(change) {
     const btn = c.can_undo && c.can_revert !== false && h("button", { type: "button", class: "ghost small-btn" },
       c.status === "conflict" ? "Hoàn tác…" : c.soft ? "Khôi phục" : "Hoàn tác");
     if (btn) btn.addEventListener("click", guard(async () => { await runUndo(c, box, (next) => { cur = next; paint(); }); }));
-    box.replaceChildren(h("span", { class: cls }, h("span", { "aria-hidden": "true" }, mark + " "), text), btn || null);
+    setKids(box, h("span", { class: cls }, h("span", { "aria-hidden": "true" }, mark + " "), text), btn || null);
   };
   const poll = async () => {
     try {
@@ -467,7 +467,7 @@ function chatView(main) {
 
   const resize = () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 200) + "px"; };
   const syncSend = () => {
-    sendBtn.replaceChildren(icon(activeRun ? "stop" : "send"));
+    setKids(sendBtn, icon(activeRun ? "stop" : "send"));
     sendBtn.setAttribute("aria-label", activeRun ? "Dừng" : "Gửi");
     sendBtn.title = activeRun ? "Dừng" : "Gửi";
     sendBtn.disabled = !activeRun && (queued || !input.value.trim());
@@ -710,17 +710,17 @@ function chatView(main) {
     const running = [];  // {tool, args, row, at}
     let lastEvent = Date.now();
     let frame = 0;
-    const paint = () => { frame = 0; if (cur) cur.el.replaceChildren(renderMarkdown(cur.text)); scroll(); };
+    const paint = () => { frame = 0; if (cur) setKids(cur.el, renderMarkdown(cur.text)); scroll(); };
     const queuePaint = () => { if (!frame) frame = requestAnimationFrame(paint); };
     const secs = (t) => `${Math.max(0, Math.round((Date.now() - t) / 1000))}s`;
     const tickStatus = () => {
       for (const r of running) { const el = r.row.querySelector(".elapsed"); if (el) el.textContent = secs(r.at); }
-      status.replaceChildren(running.length ? busy(`Đang chạy ${running.map((r) => shortTool(r.tool)).join(", ")}… ${secs(Math.min(...running.map((r) => r.at)))}`)
+      setKids(status, running.length ? busy(`Đang chạy ${running.map((r) => shortTool(r.tool)).join(", ")}… ${secs(Math.min(...running.map((r) => r.at)))}`)
         : busy(`${cur ? "Đang viết" : "Đang suy nghĩ"}… ${secs(lastEvent)}`));
     };
     tickStatus();
     const ticker = setInterval(tickStatus, 1000);
-    const stopTicker = () => { clearInterval(ticker); status.replaceChildren(); };
+    const stopTicker = () => { clearInterval(ticker); setKids(status); };
     const fail = (message) => { stopTicker(); flow.append(h("div", { class: "msg-error" }, message)); };
     const sameCall = (r, step) => r.tool === step.tool && JSON.stringify(r.args || {}) === JSON.stringify(step.args || {});
 
@@ -853,7 +853,7 @@ function chatView(main) {
     const text = (k) => (k === "slot" ? "Đang chờ tới lượt điều tra: các cuộc điều tra khác đang chạy, agent sẽ tự bắt đầu khi có chỗ trống" : "Agent đang bắt đầu điều tra");
     const status = h("div", { class: "small muted", role: "status" });
     const card = h("div", { class: "msg assistant queued-card" }, status);
-    const paint = () => status.replaceChildren(busy(`${text(kind)}… ${Math.round((Date.now() - since) / 1000)}s`));
+    const paint = () => setKids(status, busy(`${text(kind)}… ${Math.round((Date.now() - since) / 1000)}s`));
     paint();
     const ticker = setInterval(paint, 1000);
     thread.append(card);
