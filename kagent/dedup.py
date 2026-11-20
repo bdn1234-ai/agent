@@ -3,7 +3,8 @@
 Cụm = các KU cùng loại trên cùng một trang thực thể; thực thể hiếm xét trước nên cụm cụ thể nhất được nhận KU.
 LLM chia cụm thành nhóm "cùng một điều":
 - ứng viên trùng một KU khác → tự xử lý: loại ứng viên, KU giữ lại nhận thêm nguồn (nội dung agent thấy không đổi);
-- cần viết bản gộp, hoặc có từ 2 KU đang dùng → đề xuất, chờ admin duyệt, vì đổi điều agent sẽ thấy.
+- nhóm chỉ toàn ứng viên cần viết bản gộp → tự gộp thành một ứng viên mới, cổng duyệt xét như mọi ứng viên;
+- nhóm có KU đang dùng cần viết bản gộp, hoặc có từ 2 KU đang dùng → đề xuất, chờ admin duyệt, vì đổi điều agent sẽ thấy.
 Cụm không đổi từ lần xét trước thì không gọi lại LLM.
 """
 from __future__ import annotations
@@ -80,7 +81,7 @@ def _propose(conn, tenant_id: str, entity: str, members: list[dict], title: str,
 
 def apply(conn, tenant_id: str, entity: str, members: list[dict], groups: list[dict]) -> dict:
     by_id = {m["id"]: m for m in members}
-    done = {"confirmed": 0, "proposed": 0}
+    done = {"confirmed": 0, "merged": 0, "proposed": 0}
     for g in groups:
         group = [by_id[i] for i in g["ids"]]
         actives = [m for m in group if m["status"] == "active"]
@@ -95,6 +96,12 @@ def apply(conn, tenant_id: str, entity: str, members: list[dict], groups: list[d
             if len(actives) >= 2:
                 done["proposed"] += _propose(conn, tenant_id, entity, actives, keep["title"], keep["content"], keep.get("applies_when") or "",
                                              g["reason"] or "các KU đang dùng nói cùng một điều")
+        elif not actives:
+            try:
+                knowledge.merge(conn, tenant_id, [m["id"] for m in group], g, "dedup")
+                done["merged"] += len(group)
+            except ValueError:  # LLM trả bản gộp rỗng: để admin viết
+                done["proposed"] += _propose(conn, tenant_id, entity, group, g["title"], g["content"], g["applies_when"], g["reason"])
         else:
             done["proposed"] += _propose(conn, tenant_id, entity, group, g["title"], g["content"], g["applies_when"], g["reason"])
     return done
@@ -102,7 +109,7 @@ def apply(conn, tenant_id: str, entity: str, members: list[dict], groups: list[d
 
 def run(conn, tenant_id: str, provider=None, limit: int = CLUSTERS_PER_RUN) -> dict:
     provider = provider or llm.get_provider()
-    summary = {"at": db.iso(), "clusters": 0, "skipped": 0, "confirmed": 0, "proposed": 0, "remaining": 0, "errors": []}
+    summary = {"at": db.iso(), "clusters": 0, "skipped": 0, "confirmed": 0, "merged": 0, "proposed": 0, "remaining": 0, "errors": []}
     with llm.collect_usage(tenant_id) as usage:
         try:
             for entity, members in clusters(conn, tenant_id):

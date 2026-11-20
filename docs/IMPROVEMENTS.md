@@ -332,8 +332,10 @@ Trang thực thể không do LLM viết lại, nên trùng lặp phải gộp �
 - **Tìm trùng theo cụm (`dedup.py`):** cụm = KU cùng loại trên một trang thực thể, thực thể hiếm xét trước, mỗi KU một cụm,
   cụm không đổi thì không gọi lại LLM. LLM chia nhóm "cùng một điều":
   - ứng viên trùng một KU khác: tự loại (op `CONFIRM`), nguồn của nó thành xác nhận cho KU giữ lại, trừ khi nguồn kém tin hơn;
-  - cần viết bản gộp, hoặc từ 2 KU đang dùng: thành đề xuất ở màn Tri thức (L1), admin sửa được bản gộp, bấm Gộp hoặc Bỏ qua.
-    Nhóm đã bỏ qua không được đề xuất lại.
+  - nhóm chỉ toàn ứng viên cần viết bản gộp: tự gộp thành một ứng viên mới (actor `dedup`), cổng duyệt xét như mọi ứng viên;
+    lần chạy thật đầu tiên LLM không chọn "trùng hệt" lần nào, nên 19/22 đề xuất là nhóm chỉ toàn ứng viên phải chờ admin;
+  - nhóm có KU đang dùng cần viết bản gộp, hoặc từ 2 KU đang dùng: thành đề xuất ở màn Tri thức (L1), admin sửa được bản gộp,
+    bấm Gộp hoặc Bỏ qua. Nhóm đã bỏ qua không được đề xuất lại.
 - **`merge` nhận KU đang dùng:** bản gộp có hiệu lực ngay, cộng dồn bộ đếm hữu ích/có hại; bản gốc đang dùng chuyển `deprecated`
   kèm `superseded_by`.
 - **Chạy:** sau lần kiểm tra hằng ngày, trong luồng nền; nút "Tìm KU trùng ngay". Tối đa 60 cụm mỗi lần.

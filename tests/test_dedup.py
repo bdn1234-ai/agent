@@ -87,7 +87,7 @@ def test_rejected_group_is_not_proposed_again_and_stale_proposal_refused(users):
         dedup.decide(conn, t, pid, False, "admin")
         assert dedup.apply(conn, t, "wikijs", [knowledge.get(conn, t, a["id"]), knowledge.get(conn, t, b["id"])],
                            [{"ids": [a["id"], b["id"]], "same": True, "keep": a["id"], "title": "", "content": "", "applies_when": "", "reason": ""}]) \
-            == {"confirmed": 0, "proposed": 0}
+            == {"confirmed": 0, "merged": 0, "proposed": 0}
         c, d = _add(conn, t, "y1", entities=["etcd"]), _add(conn, t, "y2", entities=["etcd"])
         dedup.run(conn, t, llm.HeuristicProvider())
         pid = next(p["id"] for p in dedup.proposals(conn, t) if c["id"] in p["ids"])
@@ -120,3 +120,17 @@ def test_curator_sees_same_topic_kus_with_different_words(users):
         peers = learning.topic_neighbours(conn, t, item, "tenant", set())
         assert [p["id"] for p in peers] == [old["id"]] and peers[0]["via"] == "entity"
         assert llm.HeuristicProvider().curate(item, peers)["op"] == "ADD"  # heuristic không đoán trùng chỉ vì chung thực thể
+
+
+def test_candidate_only_group_is_merged_without_review(users):
+    t = users["admin"].tenant
+    with db.session() as conn:
+        a = _add(conn, t, "c1", status="candidate", eps=["ep-1"])
+        b = _add(conn, t, "c2", "Wikijs crash vì role wikijs không là thành viên role wiki; GRANT wiki TO wikijs", status="candidate", eps=["ep-2"])
+        summary = dedup.run(conn, t, llm.HeuristicProvider())
+        olds = [knowledge.get(conn, t, i) for i in (a["id"], b["id"])]
+        new = knowledge.get(conn, t, olds[0]["superseded_by"])
+        assert dedup.proposals(conn, t) == []
+    assert summary["merged"] == 2 and summary["proposed"] == 0
+    assert {o["status"] for o in olds} == {"rejected"} and olds[1]["superseded_by"] == new["id"]
+    assert new["status"] == "candidate" and new["source_eps"] == ["ep-1", "ep-2"]

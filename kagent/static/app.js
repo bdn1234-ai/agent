@@ -606,7 +606,7 @@ function lintCard(report, reload) {
       r.unused.length > 0 && h("details", {}, h("summary", { class: "small" }, `${r.unused.length} KU đang dùng nhưng ${r.unused_days} ngày chưa được nạp vào lượt nào`),
         list(r.unused, (x) => h("li", {}, `${x.title} (${x.kind}, lần cuối ${fmtTime(x.last_used)})`))),
       r.dedup && h("div", { class: "small" }, `Tìm KU trùng lúc ${fmtTime(r.dedup.at)}: xét ${r.dedup.clusters} cụm (bỏ qua ${r.dedup.skipped} cụm không đổi), ` +
-        `tự gộp ${r.dedup.confirmed} ứng viên vào KU nói cùng điều, đề xuất ${r.dedup.proposed} bản gộp` +
+        `tự gộp ${r.dedup.confirmed} ứng viên vào KU nói cùng điều, gộp ${r.dedup.merged || 0} ứng viên trùng thành bản mới (vẫn là ứng viên), đề xuất ${r.dedup.proposed} bản gộp` +
         (r.dedup.remaining ? `; còn ${r.dedup.remaining} cụm cho lần sau` : "") + (r.dedup.errors.length ? `; ${r.dedup.errors.length} cụm lỗi: ${r.dedup.errors[0]}` : "") + "."),
       !r.expired.length && !r.entity_merges.length && !r.contradictions.length && !r.unused.length && h("div", { class: "small muted" }, "Không có gì cần xử lý."));
   }

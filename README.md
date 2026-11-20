@@ -13,7 +13,7 @@ Tri thức đến từ ba nguồn: lượt chat (Reflector → Curator → cổn
 postmortem, ghi chú markdown) và sự cố đã xử lý xong. Mỗi KU trỏ về nguồn của nó; tài liệu được giữ nguyên bản, KU ghi đoạn
 đã tách ra. Compiler dựng playbook, quy ước core và trang cho từng thực thể (`entities/*.md`); agent tự tra giữa lượt bằng
 `search_knowledge` và `read_knowledge_page`. Vòng nền kiểm tra kho mỗi ngày: loại ứng viên quá hạn, nối KU cùng chủ đề,
-gợi ý gộp tên thực thể, gộp KU trùng ý (ứng viên trùng tự gộp; gộp KU đang dùng thì chờ admin duyệt). Biến liên quan: `KAGENT_LINT_STALE_DAYS` (mặc định 7), `KAGENT_INCIDENT_LEARN` (mặc định 1).
+gợi ý gộp tên thực thể, gộp KU trùng ý (nhóm chỉ toàn ứng viên tự gộp, bản gộp vẫn là ứng viên; gộp KU đang dùng thì chờ admin duyệt). Biến liên quan: `KAGENT_LINT_STALE_DAYS` (mặc định 7), `KAGENT_INCIDENT_LEARN` (mặc định 1).
 
 ## Chạy cục bộ
 
