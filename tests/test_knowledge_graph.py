@@ -7,6 +7,20 @@ def _ku(tenant, title, content, entities, status="active", scope="tenant"):
         return knowledge.add(conn, tenant, kind="fact", title=title, content=content, entities=entities, source_eps=[], source_trust="user", status=status, scope=scope)
 
 
+def test_graph_with_entity_adds_its_kus_beyond_the_default_limit(users, monkeypatch):
+    from kagent import api
+    a = users["admin"]
+    monkeypatch.setattr(api, "GRAPH_LIMIT", 2)
+    for i in range(3):
+        _ku(a.tenant, f"đệm {i}", f"nội dung {i}", [f"svc-{i}"])
+    rare = _ku(a.tenant, "Về etcd", "etcd cần defrag", ["etcd"])
+    with db.session() as conn:
+        conn.execute("UPDATE knowledge_unit SET recorded_at='2000-01-01T00:00:00+00:00' WHERE id=?", (rare["id"],))
+    assert rare["id"] not in {n["id"] for n in a.get("/api/knowledge/graph").json()["nodes"]}
+    nodes = a.get("/api/knowledge/graph?entity=etcd").json()["nodes"]
+    assert len(nodes) == 3 and rare["id"] in {n["id"] for n in nodes}
+
+
 def test_graph_lookup_by_query_entity_and_candidates(users):
     a = users["admin"]
     x = _ku(a.tenant, "Index log svc-backend", "Log svc-backend nằm trong index k8s-staging-svc-backend", ["svc-backend", "kibana"])
@@ -18,7 +32,8 @@ def test_graph_lookup_by_query_entity_and_candidates(users):
     assert {n["id"] for n in g["nodes"]} == {x["id"], y["id"]} and g["edges"] == [{"src": x["id"], "dst": y["id"], "rel": "refines"}]
     assert {e["entity"]: e["n"] for e in g["entities"]}["svc-backend"] == 2
     assert c["id"] in {n["id"] for n in a.get("/api/knowledge/graph?include_candidates=true").json()["nodes"]}
-    assert {n["id"] for n in a.get("/api/knowledge/graph?entity=kibana").json()["nodes"]} == {x["id"]}
+    # Chọn thực thể không lọc mất phần còn lại của đồ thị (giao diện chỉ làm nổi phần liên quan).
+    assert {n["id"] for n in a.get("/api/knowledge/graph?entity=kibana").json()["nodes"]} == {x["id"], y["id"]}
     q = a.get("/api/knowledge/graph?q=index log svc-backend").json()["nodes"]
     assert q[0]["id"] == x["id"] and "score" in q[0]
 

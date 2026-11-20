@@ -916,11 +916,12 @@ def knowledge_graph(q: str = "", entity: str = "", include_candidates: bool = Fa
             hits[ku["id"]] = ku["score"]
         ids = list(hits)
         rows = conn.execute(f"SELECT * FROM knowledge_unit WHERE {visible()} AND id IN ({','.join('?' * len(ids))})", (*args, *ids)).fetchall() if ids else []
-    elif entity.strip():
-        rows = conn.execute(f"SELECT k.* FROM knowledge_unit k, json_each(k.entities) e WHERE {visible('k.')} "
-                            "AND e.value=? LIMIT ?", (*args, entity.strip(), GRAPH_LIMIT)).fetchall()
     else:
         rows = conn.execute(f"SELECT * FROM knowledge_unit WHERE {visible()} ORDER BY helpful_cnt DESC, recorded_at DESC LIMIT ?", (*args, GRAPH_LIMIT)).fetchall()
+        if entity.strip():  # đồ thị chung kèm mọi KU của thực thể, để giao diện làm nổi phần liên quan thay vì lọc mất phần còn lại
+            seen = {r["id"] for r in rows}
+            rows += [r for r in conn.execute(f"SELECT k.* FROM knowledge_unit k, json_each(k.entities) e WHERE {visible('k.')} "
+                                             "AND e.value=? LIMIT ?", (*args, entity.strip(), GRAPH_LIMIT)).fetchall() if r["id"] not in seen]
     kus = db.rows(rows, "entities", "source_eps")
     ids = [k["id"] for k in kus]
     edges = db.rows(conn.execute(f"SELECT src, dst, rel FROM ku_edge WHERE tenant_id=? AND src IN ({','.join('?' * len(ids))}) AND dst IN ({','.join('?' * len(ids))})",

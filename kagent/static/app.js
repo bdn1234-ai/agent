@@ -1427,7 +1427,7 @@ function similarEntities(name, all) {
   return all.filter((e) => e !== name && !e.startsWith("tool:")).filter((e) => { const o = bare(e); return o === b || (Math.min(o.length, b.length) >= 4 && (o.includes(b) || b.includes(o))); });
 }
 
-function graphCanvas({ nodes, links, W, H, onKu, onEntity, selected }) {
+function graphCanvas({ nodes, links, W, H, onKu, onEntity, selected, highlight }) {
   const pos = new Map(nodes.map((n) => [n.id, n]));
   const adj = new Map(nodes.map((n) => [n.id, new Set([n.id])]));
   for (const l of links) { adj.get(l.source)?.add(l.target); adj.get(l.target)?.add(l.source); }
@@ -1507,8 +1507,10 @@ function graphCanvas({ nodes, links, W, H, onKu, onEntity, selected }) {
   el.addEventListener("pointerup", end); el.addEventListener("pointercancel", end);
   el.addEventListener("dblclick", (ev) => { if (!ev.target.closest(".kg-node, .kg-ent")) fit(); });
 
-  // Rê chuột lên một nút: làm mờ phần không nối với nó để thấy cụm liên quan.
+  // Rê chuột lên một nút: làm mờ phần không nối với nó để thấy cụm liên quan; rời chuột thì về nút đang chọn (highlight).
+  let pinned = highlight || null;
   const focus = (id) => {
+    id = id || pinned;
     const near = id ? adj.get(id) : null;
     el.classList.toggle("focus", !!near);
     nodeEls.forEach((g, nid) => g.classList.toggle("near", !!near && near.has(nid)));
@@ -1521,13 +1523,17 @@ function graphCanvas({ nodes, links, W, H, onKu, onEntity, selected }) {
     g.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); const n = pos.get(id); select(id); n.entity ? onEntity(n.entity) : onKu(n.ku); } });
   });
   if (selected) select(selected);
+  focus(null);
 
   const tools = h("div", { class: "kg-tools" },
     h("button", { type: "button", class: "icon-btn", title: "Phóng to", "aria-label": "Phóng to", onclick: () => zoomAt(1.3) }, "+"),
     h("button", { type: "button", class: "icon-btn", title: "Thu nhỏ", "aria-label": "Thu nhỏ", onclick: () => zoomAt(1 / 1.3) }, "−"),
     h("button", { type: "button", class: "icon-btn", title: "Vừa khung (nháy đúp nền)", "aria-label": "Vừa khung", onclick: fit }, "⤢"));
   fit();
-  return h("div", { class: "kg-canvas" }, el, tools);
+  const canvas = h("div", { class: "kg-canvas" }, el, tools);
+  canvas.has = (id) => pos.has(id);
+  canvas.highlight = (id) => { pinned = id; select(id); focus(null); };
+  return canvas;
 }
 
 async function knowledgeGraphView(main) {
@@ -1540,7 +1546,14 @@ async function knowledgeGraphView(main) {
   const hint = () => h("div", { class: "small muted" }, "Chọn một nút để xem chi tiết. Cuộn chuột để phóng to, kéo nền để di chuyển, kéo nút để sắp lại, nháy đúp nền để vừa khung.");
   const detail = h("div", { class: "card kg-detail" }, hint());
   const list = h("div");
-  const setEntity = (e) => { entity = e; store.set("kg:entity", e); if (e) { q.value = ""; store.set("kg:q", null); } load(); };
+  let canvas = null, data = null;
+  // Chọn thực thể chỉ làm nổi phần nối với nó, giữ nguyên đồ thị; chỉ tải lại khi thực thể chưa có trên đồ thị.
+  const setEntity = (e) => {
+    entity = e; store.set("kg:entity", e);
+    if (e && q.value) { q.value = ""; store.set("kg:q", null); return load(); }
+    if (canvas && (!e || canvas.has("e:" + e))) { canvas.highlight(e ? "e:" + e : null); side(); return; }
+    load();
+  };
 
   function showKu(k) {
     setKids(detail, h("div", { class: "row" }, h("span", { class: `badge sw-badge ${KIND_CLASS[k.kind]}` }, KIND_LABEL[k.kind] || k.kind), badge(k.status),
@@ -1586,20 +1599,27 @@ async function knowledgeGraphView(main) {
     forceLayout(nodes, links, W, H);
     setKids(graphBox, h("div", { class: "chart-legend" }, Object.entries(KIND_LABEL).map(([k, l]) => h("span", {}, h("span", { class: `sw ${KIND_CLASS[k]}` }), l)),
       h("span", {}, h("span", { class: "sw ent-sw" }), "thực thể"), h("span", { class: "small muted" }, "nét đứt: gộp từ · nét màu: cùng chủ đề · đỏ: mâu thuẫn · viền rỗng: ứng viên · phóng to để xem tên")),
-      graphCanvas({ nodes, links, W, H, onKu: showKu, onEntity: (e) => (e === entity ? showEntity(e) : setEntity(e)), selected: entity ? "e:" + entity : null }));
+      canvas = graphCanvas({ nodes, links, W, H, onKu: showKu, onEntity: (e) => (e === entity ? showEntity(e) : setEntity(e)),
+        selected: entity ? "e:" + entity : null, highlight: entity ? "e:" + entity : null }));
   }
 
   async function load() {
     const params = new URLSearchParams({ q: q.value.trim(), entity: entity || "", include_candidates: withCandidates.checked ? "true" : "false" });
-    const data = await api("GET", "/api/knowledge/graph?" + params);
+    data = await api("GET", "/api/knowledge/graph?" + params);
     allEntities = data.entities;
+    canvas = null;
+    draw(data);
+    side();
+  }
+
+  function side() {
     setKids(chips, h("span", { class: "small" }, "Thực thể:"), ...data.entities.slice(0, 24).map((e) =>
       h("button", { type: "button", class: "chip" + (e.entity === entity ? " on" : ""), onclick: () => setEntity(e.entity === entity ? "" : e.entity) }, `${e.entity} (${e.n})`)));
-    draw(data);
     if (entity) showEntity(entity); else setKids(detail, hint());
+    const shown = entity && !q.value.trim() ? data.nodes.filter((k) => k.entities.includes(entity)) : data.nodes;
     const title = q.value.trim() ? `Agent sẽ nạp ${data.nodes.length} tri thức cho câu hỏi này (xếp theo điểm truy xuất)`
-      : entity ? `${data.nodes.length} tri thức về ${entity}` : `${data.nodes.length} tri thức${withCandidates.checked ? " (gồm ứng viên)" : " đang hiệu lực"}`;
-    setKids(list, h("h3", {}, title), ...data.nodes.slice(0, 50).map((k) => h("div", { class: "card kg-item", onclick: () => showKu(k) },
+      : entity ? `${shown.length} tri thức về ${entity}` : `${data.nodes.length} tri thức${withCandidates.checked ? " (gồm ứng viên)" : " đang hiệu lực"}`;
+    setKids(list, h("h3", {}, title), ...shown.slice(0, 50).map((k) => h("div", { class: "card kg-item", onclick: () => showKu(k) },
       h("div", { class: "row" }, h("span", { class: `badge sw-badge ${KIND_CLASS[k.kind]}` }, KIND_LABEL[k.kind] || k.kind), k.status !== "active" && badge(k.status),
         k.score !== undefined && h("span", { class: "small muted" }, `điểm ${k.score}`), h("b", {}, k.title)),
       h("div", { class: "small" }, k.content))));
