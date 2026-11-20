@@ -1548,12 +1548,25 @@ async function knowledgeGraphView(main) {
   const list = h("div");
   let canvas = null, data = null;
   // Chọn thực thể chỉ làm nổi phần nối với nó, giữ nguyên đồ thị; chỉ tải lại khi thực thể chưa có trên đồ thị.
+  let kuSel = null;
   const setEntity = (e) => {
-    entity = e; store.set("kg:entity", e);
+    entity = e; store.set("kg:entity", e); kuSel = null;
     if (e && q.value) { q.value = ""; store.set("kg:q", null); return load(); }
     if (canvas && (!e || canvas.has("e:" + e))) { canvas.highlight(e ? "e:" + e : null); side(); return; }
     load();
   };
+  // Bấm lại đúng nút đang chọn thì bỏ chọn: tri thức về lại thực thể đang chọn (nếu có), thực thể về đồ thị bình thường.
+  const pickKu = (k) => {
+    if (kuSel === k.id) {
+      kuSel = null;
+      canvas?.highlight(entity ? "e:" + entity : null);
+      return entity ? showEntity(entity) : setKids(detail, hint());
+    }
+    kuSel = k.id;
+    canvas?.highlight(k.id);
+    showKu(k);
+  };
+  const pickEntity = (e) => setEntity(e === entity && !kuSel ? "" : e);
 
   function showKu(k) {
     setKids(detail, h("div", { class: "row" }, h("span", { class: `badge sw-badge ${KIND_CLASS[k.kind]}` }, KIND_LABEL[k.kind] || k.kind), badge(k.status),
@@ -1599,7 +1612,7 @@ async function knowledgeGraphView(main) {
     forceLayout(nodes, links, W, H);
     setKids(graphBox, h("div", { class: "chart-legend" }, Object.entries(KIND_LABEL).map(([k, l]) => h("span", {}, h("span", { class: `sw ${KIND_CLASS[k]}` }), l)),
       h("span", {}, h("span", { class: "sw ent-sw" }), "thực thể"), h("span", { class: "small muted" }, "nét đứt: gộp từ · nét màu: cùng chủ đề · đỏ: mâu thuẫn · viền rỗng: ứng viên · phóng to để xem tên")),
-      canvas = graphCanvas({ nodes, links, W, H, onKu: showKu, onEntity: (e) => (e === entity ? showEntity(e) : setEntity(e)),
+      canvas = graphCanvas({ nodes, links, W, H, onKu: pickKu, onEntity: pickEntity,
         selected: entity ? "e:" + entity : null, highlight: entity ? "e:" + entity : null }));
   }
 
@@ -1607,7 +1620,7 @@ async function knowledgeGraphView(main) {
     const params = new URLSearchParams({ q: q.value.trim(), entity: entity || "", include_candidates: withCandidates.checked ? "true" : "false" });
     data = await api("GET", "/api/knowledge/graph?" + params);
     allEntities = data.entities;
-    canvas = null;
+    canvas = null; kuSel = null;
     draw(data);
     side();
   }
@@ -1619,7 +1632,7 @@ async function knowledgeGraphView(main) {
     const shown = entity && !q.value.trim() ? data.nodes.filter((k) => k.entities.includes(entity)) : data.nodes;
     const title = q.value.trim() ? `Agent sẽ nạp ${data.nodes.length} tri thức cho câu hỏi này (xếp theo điểm truy xuất)`
       : entity ? `${shown.length} tri thức về ${entity}` : `${data.nodes.length} tri thức${withCandidates.checked ? " (gồm ứng viên)" : " đang hiệu lực"}`;
-    setKids(list, h("h3", {}, title), ...shown.slice(0, 50).map((k) => h("div", { class: "card kg-item", onclick: () => showKu(k) },
+    setKids(list, h("h3", {}, title), ...shown.slice(0, 50).map((k) => h("div", { class: "card kg-item", onclick: () => pickKu(k) },
       h("div", { class: "row" }, h("span", { class: `badge sw-badge ${KIND_CLASS[k.kind]}` }, KIND_LABEL[k.kind] || k.kind), k.status !== "active" && badge(k.status),
         k.score !== undefined && h("span", { class: "small muted" }, `điểm ${k.score}`), h("b", {}, k.title)),
       h("div", { class: "small" }, k.content))));
