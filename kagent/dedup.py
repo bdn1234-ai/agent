@@ -137,7 +137,7 @@ def run(conn, tenant_id: str, provider=None, limit: int = CLUSTERS_PER_RUN) -> d
 
 def proposals(conn, tenant_id: str) -> list[dict]:
     out = []
-    for r in conn.execute("SELECT * FROM ku_merge_proposal WHERE tenant_id=? AND status='pending' ORDER BY created_at", (tenant_id,)).fetchall():
+    for r in conn.execute("SELECT * FROM ku_merge_proposal WHERE tenant_id=? AND status='pending' ORDER BY created_at DESC, rowid DESC", (tenant_id,)).fetchall():
         p = db.row(r, "ids")
         p["members"] = [{k: ku[k] for k in ("id", "status", "kind", "title", "content", "applies_when", "source_trust", "helpful_cnt", "harmful_cnt")}
                         for ku in (knowledge.get(conn, tenant_id, i) for i in p["ids"]) if ku]

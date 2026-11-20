@@ -82,7 +82,7 @@ def get(conn, tenant_id: str, doc_id: str) -> dict | None:
 
 def kus_of(conn, tenant_id: str, doc_id: str) -> list[dict]:
     rs = conn.execute("SELECT k.id, k.kind, k.title, k.status, group_concat(e.value) srcs FROM knowledge_unit k, json_each(k.source_eps) e "
-                      "WHERE k.tenant_id=? AND e.value LIKE ? GROUP BY k.id ORDER BY k.recorded_at", (tenant_id, f"doc:{doc_id}#%")).fetchall()
+                      "WHERE k.tenant_id=? AND e.value LIKE ? GROUP BY k.id ORDER BY k.recorded_at DESC", (tenant_id, f"doc:{doc_id}#%")).fetchall()
     return [{"id": r["id"], "kind": r["kind"], "title": r["title"], "status": r["status"],
              "sections": sorted({int(s.rsplit("#", 1)[1]) for s in r["srcs"].split(",")})} for r in rs]
 

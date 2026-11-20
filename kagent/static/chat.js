@@ -26,7 +26,7 @@ function icon(name) {
   svg.setAttribute("aria-hidden", "true");
   const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   path.setAttribute("d", ICONS[name]);
-  svg.append(path);
+  addKids(svg, path);
   return svg;
 }
 
@@ -77,17 +77,17 @@ function renderMarkdown(text) {
       i++;
       while (i < lines.length && !/^```\s*$/.test(lines[i])) body.push(lines[i++]);
       i++;
-      frag.append(codeBlock(body.join("\n"), fence[1]));
+      addKids(frag, codeBlock(body.join("\n"), fence[1]));
       continue;
     }
     if (!line.trim()) { i++; continue; }
     const heading = line.match(/^(#{1,6})\s+(.*)/);
-    if (heading) { frag.append(h("h" + Math.min(heading[1].length + 2, 6), {}, inlineMd(heading[2]))); i++; continue; }
-    if (/^---+\s*$/.test(line)) { frag.append(h("hr")); i++; continue; }
+    if (heading) { addKids(frag, h("h" + Math.min(heading[1].length + 2, 6), {}, inlineMd(heading[2]))); i++; continue; }
+    if (/^---+\s*$/.test(line)) { addKids(frag, h("hr")); i++; continue; }
     if (/^>\s?/.test(line)) {
       const quote = [];
       while (i < lines.length && /^>\s?/.test(lines[i])) quote.push(lines[i++].replace(/^>\s?/, ""));
-      frag.append(h("blockquote", {}, renderMarkdown(quote.join("\n"))));
+      addKids(frag, h("blockquote", {}, renderMarkdown(quote.join("\n"))));
       continue;
     }
     if (line.includes("|") && i + 1 < lines.length && /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(lines[i + 1]) && lines[i + 1].includes("-")) {
@@ -95,7 +95,7 @@ function renderMarkdown(text) {
       i += 2;
       const body = [];
       while (i < lines.length && lines[i].includes("|") && lines[i].trim()) body.push(splitRow(lines[i++]));
-      frag.append(h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, head.map((c) => h("th", {}, inlineMd(c))))), h("tbody", {}, body.map((r) => h("tr", {}, r.map((c) => h("td", {}, inlineMd(c)))))))));
+      addKids(frag, h("div", { class: "scroll" }, h("table", {}, h("thead", {}, h("tr", {}, head.map((c) => h("th", {}, inlineMd(c))))), h("tbody", {}, body.map((r) => h("tr", {}, r.map((c) => h("td", {}, inlineMd(c)))))))));
       continue;
     }
     const list = line.match(/^\s*([-*+]|\d+\.)\s+/);
@@ -104,15 +104,15 @@ function renderMarkdown(text) {
       const pattern = ordered ? /^\s*\d+\.\s+/ : /^\s*[-*+]\s+/;
       const items = [];
       while (i < lines.length && pattern.test(lines[i])) items.push(h("li", {}, inlineMd(lines[i++].replace(pattern, ""))));
-      frag.append(h(ordered ? "ol" : "ul", {}, items));
+      addKids(frag, h(ordered ? "ol" : "ul", {}, items));
       continue;
     }
     const para = [];
     while (i < lines.length && lines[i].trim() && !isBlockStart(lines[i])) para.push(lines[i++]);
     if (!para.length) para.push(lines[i++]);
     const p = h("p");
-    para.forEach((l, n) => { if (n) p.append(h("br")); p.append(...inlineMd(l).map((x) => (x instanceof Node ? x : document.createTextNode(x)))); });
-    frag.append(p);
+    para.forEach((l, n) => { if (n) addKids(p, h("br")); addKids(p, ...inlineMd(l).map((x) => (x instanceof Node ? x : document.createTextNode(x)))); });
+    addKids(frag, p);
   }
   return frag;
 }
@@ -544,11 +544,11 @@ function chatView(main) {
       row.after(box);
       content.focus();
     });
-    row.append(copyBtn, up, down, edit);
-    if (remember) row.append(remember);
-    if (saveTool) row.append(saveTool);
-    if (m.task === lastTask) row.append(iconButton("retry", "Gửi lại", () => send(m.task)));
-    row.append(h("span", { class: "meta" }, `${m.env} · ${m.ku_used} KU${m.tokens ? ` · ${m.tokens} token` : ""}`));
+    addKids(row, copyBtn, up, down, edit);
+    if (remember) addKids(row, remember);
+    if (saveTool) addKids(row, saveTool);
+    if (m.task === lastTask) addKids(row, iconButton("retry", "Gửi lại", () => send(m.task)));
+    addKids(row, h("span", { class: "meta" }, `${m.env} · ${m.ku_used} KU${m.tokens ? ` · ${m.tokens} token` : ""}`));
     return row;
   }
 
@@ -557,34 +557,34 @@ function chatView(main) {
     const latest = m.id === latestId();
     const flow = h("div", { class: "flow" });
     for (const item of timelineItems(m)) {
-      if (item.text !== undefined) { flow.append(h("div", { class: "prose" }, renderMarkdown(item.text))); continue; }
+      if (item.text !== undefined) { addKids(flow, h("div", { class: "prose" }, renderMarkdown(item.text))); continue; }
       const st = m.steps[item.step];
       if (!st) continue;
-      if (st.tool === "ask_user" && st.status === "asked" && st.questions) flow.append(questionCard(st, latest, (answer) => send(answer)));
-      else if (st.approval_id && byId.has(st.approval_id)) { flow.append(approvalCard(byId.get(st.approval_id), decide)); byId.delete(st.approval_id); }
-      else flow.append(toolRow(st));
+      if (st.tool === "ask_user" && st.status === "asked" && st.questions) addKids(flow, questionCard(st, latest, (answer) => send(answer)));
+      else if (st.approval_id && byId.has(st.approval_id)) { addKids(flow, approvalCard(byId.get(st.approval_id), decide)); byId.delete(st.approval_id); }
+      else addKids(flow, toolRow(st));
     }
     // Hành động sự cố đề xuất sau khi điều tra xong đi thẳng qua gateway, không nằm trong trace của lượt.
     const fixes = m.incident_actions || [];
     if (fixes.length) {
       // Câu trả lời ở trên viết trong lượt chỉ đọc ("chưa chạy lệnh ghi nào"); lệnh khắc phục đến sau, phải nói rõ để không bị đọc là chưa có đề xuất.
-      flow.append(h("div", { class: "small muted incident-fix-head" }, "Hành động khắc phục của sự cố"),
+      addKids(flow, h("div", { class: "small muted incident-fix-head" }, "Hành động khắc phục của sự cố"),
         h("div", { class: "small muted incident-fix-lead" }, `Sau khi điều tra (chỉ đọc), kagent đưa ${fixes.length} lệnh khắc phục qua gateway:`));
       for (const a of fixes) {
         const label = a.why || a.summary;
         if (a.approval_id && byId.has(a.approval_id)) {
           const req = byId.get(a.approval_id);
           byId.delete(a.approval_id);
-          flow.append(h("div", { class: "incident-fix" }, approvalCard({ ...req, why: req.why || label }, decide)));
+          addKids(flow, h("div", { class: "incident-fix" }, approvalCard({ ...req, why: req.why || label }, decide)));
           continue;
         }
-        flow.append(h("div", { class: "incident-fix" }, label && h("div", { class: "small" }, label), toolRow({ ...a, env: m.env }),
+        addKids(flow, h("div", { class: "incident-fix" }, label && h("div", { class: "small" }, label), toolRow({ ...a, env: m.env }),
           a.status === "ok" && h("div", { class: "small muted" }, (a.auto ? "Tự chạy" : "Đã chạy")
             + (a.verified === true ? " · đã hết cảnh báo" : a.verified === false ? " · cảnh báo vẫn còn" : ""))));
       }
     }
-    for (const a of byId.values()) flow.append(approvalCard(a, decide));
-    if (m.error) flow.append(h("div", { class: "msg-error" }, m.output));
+    for (const a of byId.values()) addKids(flow, approvalCard(a, decide));
+    if (m.error) addKids(flow, h("div", { class: "msg-error" }, m.output));
     const open = m.approvals.filter((a) => a.status === "pending" && a.can_decide);
     const bulk = open.length > 1 && h("div", { class: "row approval-bulk" }, h("span", { class: "small" }, `${open.length} lệnh đang chờ duyệt`),
       h("button", { type: "button", onclick: guard(() => decideAll(m, open, "approve_once")) }, "Chạy tất cả"),
@@ -654,11 +654,11 @@ function chatView(main) {
 
   function addMessage(m) {
     if (!m.continuation) lastTask = m.task;
-    thread.append(m.continuation ? continuationNote() : userBubble(m.task));
+    addKids(thread, m.continuation ? continuationNote() : userBubble(m.task));
     blocks.set(m.id, null);  // giữ chỗ để assistantBlock biết đây là tin nhắn mới nhất
     const el = assistantBlock(m);
     blocks.set(m.id, el);
-    thread.append(el);
+    addKids(thread, el);
     requestAnimationFrame(updatePending);
   }
 
@@ -694,15 +694,15 @@ function chatView(main) {
     thread.querySelectorAll(".question:not(.done)").forEach((q) => { q.classList.add("done"); q.querySelectorAll("button, input").forEach((b) => { b.disabled = true; }); });
     if (continueEpisode || continuation) {
       if (continueEpisode) blocks.get(continueEpisode)?.querySelector(".resume")?.remove();
-      thread.append(continuationNote());
+      addKids(thread, continuationNote());
     }
-    else { lastTask = text; thread.append(userBubble(text)); }
+    else { lastTask = text; addKids(thread, userBubble(text)); }
     // Lượt đang chạy dựng dần theo sự kiện: chữ mới nối vào đoạn cuối, mỗi lệnh thành một dòng ở đúng chỗ; dòng trạng thái ở cuối đếm thời gian.
     const flow = h("div", { class: "flow" });
     const status = h("div", { class: "live-status small muted", role: "status" });
     const liveEl = h("div", { class: "msg assistant live" }, flow, status);
-    thread.append(liveEl);
-    if (recap) { recap.markStale(); thread.append(recap); }
+    addKids(thread, liveEl);
+    if (recap) { recap.markStale(); addKids(thread, recap); }
     stick = true;
     scroll();
 
@@ -721,7 +721,7 @@ function chatView(main) {
     tickStatus();
     const ticker = setInterval(tickStatus, 1000);
     const stopTicker = () => { clearInterval(ticker); setKids(status); };
-    const fail = (message) => { stopTicker(); flow.append(h("div", { class: "msg-error" }, message)); };
+    const fail = (message) => { stopTicker(); addKids(flow, h("div", { class: "msg-error" }, message)); };
     const sameCall = (r, step) => r.tool === step.tool && JSON.stringify(r.args || {}) === JSON.stringify(step.args || {});
 
     const handle = (ev) => {
@@ -733,7 +733,7 @@ function chatView(main) {
         syncUrl(true);
         if (isNew) refreshConversations();
       } else if (ev.type === "delta") {
-        if (!cur) { cur = { text: "", el: h("div", { class: "prose" }) }; flow.append(cur.el); }
+        if (!cur) { cur = { text: "", el: h("div", { class: "prose" }) }; addKids(flow, cur.el); }
         cur.text += ev.text;
         queuePaint();
       } else if (ev.type === "tool_start") {
@@ -741,7 +741,7 @@ function chatView(main) {
         cur = null;
         const row = toolRow({ tool: ev.tool, args: ev.args, status: "running" });
         running.push({ tool: ev.tool, args: ev.args, row, at: Date.now() });
-        flow.append(row);
+        addKids(flow, row);
         tickStatus();
         scroll();
       } else if (ev.type === "tool_end") {
@@ -753,7 +753,7 @@ function chatView(main) {
           : step.status === "pending" ? approvalCard({ ...step, id: step.approval_id, status: "pending", decided_by: [], required_approvals: step.required_approvals || 1,
             reasons: step.reasons || [], can_decide: false }, null, true)
           : toolRow(step);
-        if (slot) slot.replaceWith(view); else flow.append(view);
+        if (slot) slot.replaceWith(view); else addKids(flow, view);
         tickStatus();
         scroll();
       } else if (ev.type === "done") {
@@ -768,7 +768,7 @@ function chatView(main) {
         if (ev.message.approvals.some((a) => a.status === "pending")) pollApprovals();
       } else if (ev.type === "stopping") {
         // Lệnh ghi đã gửi đi thì ngắt giữa chừng không hoàn tác được: đợi nó xong rồi mới dừng.
-        flow.append(h("div", { class: "small warn-text" }, `Đang đợi ${ev.waiting_for.join(", ")} chạy xong rồi dừng…`));
+        addKids(flow, h("div", { class: "small warn-text" }, `Đang đợi ${ev.waiting_for.join(", ")} chạy xong rồi dừng…`));
         scroll();
       } else if (ev.type === "error") fail(ev.message);
     };
@@ -856,7 +856,7 @@ function chatView(main) {
     const paint = () => setKids(status, busy(`${text(kind)}… ${Math.round((Date.now() - since) / 1000)}s`));
     paint();
     const ticker = setInterval(paint, 1000);
-    thread.append(card);
+    addKids(thread, card);
     queued = true;
     syncSend();
     scroll();
@@ -913,7 +913,7 @@ function chatView(main) {
     pendingBar,
     h("div", { class: "composer" }, input, h("div", { class: "composer-bar" }, env, focusBtn, h("span", { class: "spacer" }), sendBtn)),
     h("div", { class: "hint" }, notice + "Agent dùng công cụ thật qua các kết nối bạn được phép. Enter để gửi, Shift+Enter xuống dòng."));
-  main.append(scroller, toBottom, composer);
+  addKids(main, scroller, toBottom, composer);
 
   return (async () => {
     if (state.conversationId) {
@@ -921,7 +921,7 @@ function chatView(main) {
         const data = await api("GET", `/api/conversations/${state.conversationId}`);
         if (data.incident_id) {
           // Hội thoại điều tra của sự cố: dùng chung trong tenant, lượt đầu do kagent-alerts chạy.
-          thread.append(h("div", { class: "card incident-banner" },
+          addKids(thread, h("div", { class: "card incident-banner" },
             h("div", { class: "incident-banner-text", title: data.title }, h("strong", {}, data.title), " ",
               h("span", { class: "small" }, "Hội thoại điều tra dùng chung của sự cố; hỏi thêm hoặc yêu cầu khắc phục ngay tại đây.")),
             h("button", { type: "button", class: "ghost small-btn", onclick: () => go("incidents", undefined, data.incident_id) }, "Xem sự cố")));
@@ -929,7 +929,7 @@ function chatView(main) {
         data.messages.forEach(addMessage);
         if (data.incident_id) {
           recap = summaryCard(data.incident_summary, data.incident_id);
-          thread.append(recap);
+          addKids(thread, recap);
           // Như Claude Code: người quay lại trang thấy ngay bản mới máy chủ đã viết trong lúc vắng.
           const onVisible = () => {
             if (!recap.isConnected) { document.removeEventListener("visibilitychange", onVisible); return; }
@@ -947,7 +947,7 @@ function chatView(main) {
         toast(e.message, true);
       }
     }
-    if (!thread.children.length) thread.append(emptyState());
+    if (!thread.children.length) addKids(thread, emptyState());
     resize();
     syncSend();
     input.focus();
