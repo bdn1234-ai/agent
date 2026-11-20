@@ -116,6 +116,12 @@ def attach(conn, tenant_id: str, key: str, value) -> None:
                  (tenant_id, json.dumps(report, ensure_ascii=False), report["at"]))
 
 
+def refresh_entity_merges(conn, tenant_id: str) -> None:
+    """Sau khi admin gộp tên, báo cáo đã lưu không còn gợi ý nhóm vừa gộp (gợi ý tính lại rẻ, không cần chạy lại cả lint)."""
+    if latest(conn, tenant_id) is not None:
+        attach(conn, tenant_id, "entity_merges", entity_suggestions(conn, tenant_id))
+
+
 def latest(conn, tenant_id: str) -> dict | None:
     r = conn.execute("SELECT report FROM ku_lint WHERE tenant_id=?", (tenant_id,)).fetchone()
     return json.loads(r["report"]) if r else None

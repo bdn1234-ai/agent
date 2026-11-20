@@ -42,6 +42,17 @@ def test_entity_suggestions_group_separator_and_plural_variants(users):
     assert {(s["target"], tuple(s["sources"])) for s in suggestions} == {("k8s_staging", ("k8s-staging",)), ("log", ("logs",))}
 
 
+def test_merged_entity_suggestion_does_not_come_back_after_reload(users):
+    admin = users["admin"]
+    with db.session() as conn:
+        _add(conn, admin.tenant, "a", entities=["k8s_staging"])
+        _add(conn, admin.tenant, "b", entities=["k8s-staging", "logs"])
+        _add(conn, admin.tenant, "c", entities=["log"])
+        lint.run(conn, admin.tenant)
+    assert admin.post("/api/knowledge/entities/merge", json={"sources": ["k8s-staging"], "target": "k8s_staging"}).status_code == 200
+    assert [m["target"] for m in admin.get("/api/knowledge/lint").json()["entity_merges"]] == ["log"]
+
+
 def test_unused_and_contradictions(users):
     tenant = users["admin"].tenant
     with db.session() as conn:

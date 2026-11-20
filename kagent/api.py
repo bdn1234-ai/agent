@@ -944,9 +944,11 @@ class EntityMerge(BaseModel):
 def entity_merge(body: EntityMerge, t: Tenant = Depends(current_tenant), conn=Depends(get_conn)):
     t.require_admin()
     try:
-        return entities.merge(conn, t.tenant_id, body.sources, body.target, t.principal.username)
+        merged = entities.merge(conn, t.tenant_id, body.sources, body.target, t.principal.username)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    lint.refresh_entity_merges(conn, t.tenant_id)
+    return merged
 
 
 @app.get("/api/knowledge/lint")
